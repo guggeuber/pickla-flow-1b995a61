@@ -31,6 +31,10 @@ import {
 } from '../_shared/entitlements.ts';
 import { isUpstreamTransportError } from '../_shared/upstream_transport.ts';
 import {
+  optionalStripeRuntimeEnvironment,
+  requireStripeRuntimeEnvironment,
+} from '../_shared/stripe_environment.ts';
+import {
   visibleOfferedWithRelationships,
   type OfferedWithRelationship,
 } from '../_shared/product_relationships.ts';
@@ -54,6 +58,17 @@ function productMaxQuantity(product: CommerceProduct) {
 
 type StripeCheckoutSession = StripeCheckoutReturnFacts & { id: string; url: string | null };
 
+type CommerceVariant = {
+  id: string;
+  product_id: string;
+  sku: string;
+  title: string | null;
+  price_override_minor: number | null;
+  image_url: string | null;
+  status: 'active' | 'archived';
+  options?: Array<{ option_id: string; option_code: string; option_label: string; value_id: string; value_code: string; value_label: string; swatch: string | null }>;
+};
+
 type CommerceProduct = CommerceProductLike & {
   id: string;
   venue_id: string;
@@ -66,12 +81,25 @@ type CommerceProduct = CommerceProductLike & {
   early_bird_slots?: number | string | null;
   commerce_kind: string;
   fulfillment_type: string;
+  inventory_policy?: 'stockless' | 'tracked';
+  catalog_owner_organization_id?: string | null;
   resolver_rules?: Record<string, unknown> | null;
 };
 
 type RpcVersionRow = {
   version: number;
   total_inc_vat_minor?: number | string | null;
+};
+
+type RpcTrackedAttemptRow = RpcVersionRow & {
+  attempt_id: string;
+  order_id: string;
+  currency: string;
+  status: string;
+  provider_idempotency_key: string;
+  provider_request: Record<string, unknown>;
+  provider_session_id: string | null;
+  replayed: boolean;
 };
 
 type DeskFulfillmentOrderRow = {
@@ -91,6 +119,11 @@ type DeskFulfillmentLineRow = {
   fulfilled_at: string | null;
   activity_session_id: string | null;
   session_date: string | null;
+  inventory_policy?: string;
+  sku?: string | null;
+  variant_snapshot?: Record<string, unknown> | null;
+  collected_quantity?: number;
+  cancelled_quantity?: number;
 };
 
 type DeskFulfillmentLineWithOrderRow = DeskFulfillmentLineRow & {
@@ -121,6 +154,10 @@ type DeskFulfillmentItem = {
   fulfilled_at: string | null;
   pickup_instruction: string;
   pickup_eligible: boolean;
+  sku?: string | null;
+  variant_label?: string | null;
+  collected_quantity: number;
+  remaining_quantity: number;
 };
 
 const DESK_PICKUP_INSTRUCTION = 'Hämtas vid disken.';
@@ -144,7 +181,8 @@ function appendStripeFormValue(body: URLSearchParams, key: string, value: unknow
   body.append(key, String(value));
 }
 
-async function createStripeCheckoutSession(stripeKey: string, data: Record<string, unknown>) {
+async function createStripeCheckoutSession(stripeKey: string, data: Record<string, unknown>, idempotencyKey?: string) {
+  requireStripeRuntimeEnvironment(stripeKey);
   const body = new URLSearchParams();
   Object.entries(data).forEach(([key, value]) => appendStripeFormValue(body, key, value));
   const response = await fetch(`${STRIPE_API_BASE}/checkout/sessions`, {
@@ -152,6 +190,7 @@ async function createStripeCheckoutSession(stripeKey: string, data: Record<strin
     headers: {
       Authorization: `Bearer ${stripeKey}`,
       'Content-Type': 'application/x-www-form-urlencoded',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
     body,
   });
@@ -161,6 +200,7 @@ async function createStripeCheckoutSession(stripeKey: string, data: Record<strin
 }
 
 async function expireStripeCheckoutSession(stripeKey: string, sessionId: string) {
+  requireStripeRuntimeEnvironment(stripeKey);
   const response = await fetch(`${STRIPE_API_BASE}/checkout/sessions/${encodeURIComponent(sessionId)}/expire`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${stripeKey}` },
@@ -171,6 +211,7 @@ async function expireStripeCheckoutSession(stripeKey: string, sessionId: string)
 }
 
 async function retrieveStripeCheckoutSession(stripeKey: string, sessionId: string) {
+  requireStripeRuntimeEnvironment(stripeKey);
   const response = await fetch(`${STRIPE_API_BASE}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
     headers: { Authorization: `Bearer ${stripeKey}` },
   });
@@ -180,6 +221,7 @@ async function retrieveStripeCheckoutSession(stripeKey: string, sessionId: strin
 }
 
 async function createStripeRefund(stripeKey: string, paymentIntentId: string, orderId: string) {
+  requireStripeRuntimeEnvironment(stripeKey);
   const body = new URLSearchParams({
     payment_intent: paymentIntentId,
     reason: 'requested_by_customer',
@@ -197,6 +239,35 @@ async function createStripeRefund(stripeKey: string, paymentIntentId: string, or
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.error?.message || `Stripe API error ${response.status}`);
   return payload as { id: string; status?: string };
+}
+
+async function createTrackedStripeRefund(stripeKey: string, input: {
+  paymentIntentId: string;
+  orderId: string;
+  refundId: string;
+  amountMinor: number;
+  idempotencyKey: string;
+}) {
+  requireStripeRuntimeEnvironment(stripeKey);
+  const body = new URLSearchParams({
+    payment_intent: input.paymentIntentId,
+    amount: String(input.amountMinor),
+    reason: 'requested_by_customer',
+    'metadata[commerce_order_id]': input.orderId,
+    'metadata[commerce_refund_id]': input.refundId,
+  });
+  const response = await fetch(`${STRIPE_API_BASE}/refunds`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${stripeKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Idempotency-Key': input.idempotencyKey,
+    },
+    body,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error?.message || `Stripe API error ${response.status}`);
+  return payload as { id: string; status: 'pending' | 'succeeded' | 'failed'; [key: string]: unknown };
 }
 
 function safeLocalPath(value: unknown, fallback: string) {
@@ -420,6 +491,13 @@ function projectOrderLine(line: DbRecord) {
     league_team_entry_id: line.league_team_entry_id,
     dependent_participant_id: line.dependent_participant_id,
     parent_line_id: line.parent_line_id,
+    inventory_policy: line.inventory_policy || 'stockless',
+    variant_id: line.variant_id || null,
+    sku: line.sku || null,
+    pickup_location_id: line.pickup_location_id || null,
+    variant_snapshot: line.variant_snapshot || {},
+    collected_quantity: Number(line.collected_quantity || 0),
+    cancelled_quantity: Number(line.cancelled_quantity || 0),
     product_snapshot: {
       base_price_sek: Number(productSnapshot.base_price_sek || 0),
       customer_instruction_code: productSnapshot.customer_instruction_code || null,
@@ -447,6 +525,7 @@ function projectOrderLine(line: DbRecord) {
 }
 
 function projectReceiptLine(line: DbRecord) {
+  const metadata = (line.metadata || {}) as DbRecord;
   return {
     id: line.id,
     product_id: line.product_id,
@@ -461,6 +540,10 @@ function projectReceiptLine(line: DbRecord) {
     vat_rate: line.vat_rate,
     vat_amount_minor: line.vat_amount_minor,
     fulfillment_type: line.fulfillment_type,
+    variant_id: metadata.variant_id || null,
+    sku: metadata.sku || null,
+    variant_snapshot: metadata.variant_snapshot || {},
+    pickup_location_id: metadata.pickup_location_id || null,
   };
 }
 
@@ -620,7 +703,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
 async function venueContext(admin: AdminClient, venueId: string) {
   const { data, error } = await admin
     .from('venues')
-    .select('id, organization_id, name, slug, commerce_enabled')
+    .select('id, organization_id, name, slug, commerce_enabled, tracked_merch_sales_enabled, franchisee_id')
     .eq('id', venueId)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -840,19 +923,73 @@ async function validateCartItems(
   const productIds = Array.from(new Set(items.map((item) => String(item.product_id || '')).filter(Boolean)));
   const { data: products, error: productError } = await admin
     .from('access_products')
-    .select('id, venue_id, product_key, name, description, product_kind, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
-    .eq('venue_id', venueId)
+    .select('id, venue_id, product_key, name, description, product_kind, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url, inventory_policy, catalog_owner_organization_id')
     .in('id', productIds);
   if (productError) throw new Error(productError.message);
   const productById = new Map<string, CommerceProduct>(
     (products || []).map((product: CommerceProduct) => [String(product.id), product]),
   );
-  if (productById.size !== productIds.length) throw new Error('Product not found');
   const venue = await venueContext(admin, venueId);
+  const trackedProductIds = (products || [])
+    .filter((product: any) => product.inventory_policy === 'tracked')
+    .map((product: any) => String(product.id));
+  const requestedVariantIds = Array.from(new Set(items.map((item) => String(item.variant_id || '')).filter(Boolean)));
+  const requestedLocationIds = Array.from(new Set(items.map((item) => String(item.pickup_location_id || '')).filter(Boolean)));
+  const [listingResult, variantResult, locationResult, levelResult] = await Promise.all([
+    trackedProductIds.length
+      ? admin.from('product_venue_listings').select('*').eq('venue_id', venueId).in('product_id', trackedProductIds)
+      : Promise.resolve({ data: [], error: null }),
+    requestedVariantIds.length
+      ? admin.from('product_variants').select('*').in('id', requestedVariantIds)
+      : Promise.resolve({ data: [], error: null }),
+    requestedLocationIds.length
+      ? admin.from('inventory_locations').select('*').in('id', requestedLocationIds)
+      : Promise.resolve({ data: [], error: null }),
+    requestedVariantIds.length && requestedLocationIds.length
+      ? admin.from('inventory_levels').select('*').in('variant_id', requestedVariantIds).in('location_id', requestedLocationIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const relatedError = listingResult.error || variantResult.error || locationResult.error || levelResult.error;
+  if (relatedError) throw new Error(relatedError.message);
+  const listingByProduct = new Map((listingResult.data || []).map((row: any) => [String(row.product_id), row]));
+  const variantById = new Map((variantResult.data || []).map((row: any) => [String(row.id), row]));
+  const locationById = new Map((locationResult.data || []).map((row: any) => [String(row.id), row]));
+  const levelByKey = new Map((levelResult.data || []).map((row: any) => [`${row.variant_id}:${row.location_id}`, row]));
+  const { data: requestedAssignments, error: requestedAssignmentError } = requestedVariantIds.length
+    ? await admin.from('product_variant_option_values').select('*').in('variant_id', requestedVariantIds)
+    : { data: [], error: null };
+  if (requestedAssignmentError) throw new Error(requestedAssignmentError.message);
+  const requestedValueIds = (requestedAssignments || []).map((row: any) => String(row.option_value_id));
+  const { data: requestedValues, error: requestedValueError } = requestedValueIds.length
+    ? await admin.from('product_option_values').select('id, option_id, code, label, swatch').in('id', requestedValueIds)
+    : { data: [], error: null };
+  if (requestedValueError) throw new Error(requestedValueError.message);
+  const requestedOptionIds = (requestedValues || []).map((row: any) => String(row.option_id));
+  const { data: requestedOptions, error: requestedOptionError } = requestedOptionIds.length
+    ? await admin.from('product_options').select('id, code, label, sort_order').in('id', requestedOptionIds)
+    : { data: [], error: null };
+  if (requestedOptionError) throw new Error(requestedOptionError.message);
+  const requestedValueById = new Map((requestedValues || []).map((row: any) => [String(row.id), row]));
+  const requestedOptionById = new Map((requestedOptions || []).map((row: any) => [String(row.id), row]));
+  const optionSnapshotsByVariant = new Map<string, any[]>();
+  for (const assignment of requestedAssignments || []) {
+    const value = requestedValueById.get(String(assignment.option_value_id));
+    const option = value ? requestedOptionById.get(String(value.option_id)) : null;
+    if (!value || !option) continue;
+    const values = optionSnapshotsByVariant.get(String(assignment.variant_id)) || [];
+    values.push({
+      option_id: option.id, option_code: option.code, option_label: option.label,
+      value_id: value.id, value_code: value.code, value_label: value.label, swatch: value.swatch,
+      sort_order: option.sort_order,
+    });
+    optionSnapshotsByVariant.set(String(assignment.variant_id), values);
+  }
+  if (productById.size !== productIds.length) throw new Error('Product not found');
 
   const normalized = items.map((item, index) => {
     const product = productById.get(String(item.product_id || ''));
     if (!product) throw new Error('Product not found');
+    if (product.venue_id !== venueId && product.inventory_policy !== 'tracked') throw new Error('Product not found');
     const maximum = productMaxQuantity(product);
     const requestedQuantity = Math.floor(Number(item.quantity || 1));
     if (!Number.isFinite(requestedQuantity) || requestedQuantity < 1 || requestedQuantity > maximum) {
@@ -865,6 +1002,11 @@ async function validateCartItems(
       index,
       id: crypto.randomUUID(),
       product,
+      variant: variantById.get(String(item.variant_id || '')) || null,
+      listing: listingByProduct.get(product.id) || null,
+      location: locationById.get(String(item.pickup_location_id || '')) || null,
+      level: levelByKey.get(`${String(item.variant_id || '')}:${String(item.pickup_location_id || '')}`) || null,
+      optionSnapshots: optionSnapshotsByVariant.get(String(item.variant_id || '')) || [],
       quantity,
       parentLineId: null as string | null,
     };
@@ -910,6 +1052,28 @@ async function validateCartItems(
 
     if (item.product.commerce_kind !== 'participation') {
       const parentProductId = String(item.input.parent_product_id || '').trim();
+      if (item.product.inventory_policy === 'tracked') {
+        if (parentProductId || item.input.activity_session_id || item.input.source_type === 'activity_addon') {
+          throw new Error('tracked_activity_addon_unsupported');
+        }
+        if (venue.tracked_merch_sales_enabled !== true) throw new Error('Tracked merchandise sales are disabled');
+        if (!item.variant || item.variant.product_id !== item.product.id || item.variant.status !== 'active') {
+          throw new Error('A valid variant is required for tracked merchandise');
+        }
+        if (!item.location || item.location.venue_id !== venueId || item.location.status !== 'active') {
+          throw new Error('A valid pickup location is required for tracked merchandise');
+        }
+        if (!item.listing || item.listing.status !== 'active' || item.listing.tracked_sales_enabled !== true
+          || item.listing.default_inventory_location_id !== item.location.id
+          || item.listing.seller_franchisee_id !== item.location.inventory_owner_franchisee_id) {
+          throw new Error('Tracked product is not listed for this pickup location');
+        }
+        if (!item.level || item.level.incident_blocked
+          || Number(item.level.on_hand) - Number(item.level.reserved) - Number(item.level.allocated) < item.quantity) {
+          throw new Error('sold_out');
+        }
+        continue;
+      }
       if (!parentProductId) {
         const availability = evaluateCommerceAvailability(item.product, {
           channel: 'standalone',
@@ -961,6 +1125,20 @@ async function validateCartItems(
     beneficiary_user_id: item.product.commerce_kind === 'participation' ? userId || null : null,
     beneficiary_customer_id: null,
     parent_line_id: item.parentLineId,
+    variant_id: item.product.inventory_policy === 'tracked' ? item.variant?.id : null,
+    sku: item.product.inventory_policy === 'tracked' ? item.variant?.sku : null,
+    inventory_policy: item.product.inventory_policy || 'stockless',
+    pickup_location_id: item.product.inventory_policy === 'tracked' ? item.location?.id : null,
+    variant_snapshot: item.product.inventory_policy === 'tracked' ? {
+      variant_id: item.variant?.id,
+      sku: item.variant?.sku,
+      title: item.variant?.title || null,
+      image_url: item.variant?.image_url || null,
+      option_signature: item.variant?.option_signature,
+      options: [...item.optionSnapshots].sort((left: any, right: any) => Number(left.sort_order) - Number(right.sort_order)),
+      seller_franchisee_id: item.listing?.seller_franchisee_id,
+      listing_id: item.listing?.id,
+    } : {},
     product_snapshot: {
       description: item.product.description || null,
       base_price_sek: Number(item.product.base_price_sek || 0),
@@ -984,7 +1162,7 @@ async function resolveLines(
   const productIds = lines.map((line) => line.product_id).filter(Boolean);
   const { data: products, error } = await admin
     .from('access_products')
-    .select('id, venue_id, product_key, product_kind, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url')
+    .select('id, venue_id, product_key, product_kind, name, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, scarcity_mode, early_bird_price_minor, early_bird_slots, resolver_rules, commerce_enabled, is_active, status, standalone_enabled, activity_addon_enabled, category, sport, image_url, inventory_policy, catalog_owner_organization_id')
     .in('id', productIds);
   if (error) throw new Error(error.message);
   const productsById = new Map<string, CommerceProduct>(
@@ -993,12 +1171,48 @@ async function resolveLines(
   const venue = await venueContext(admin, order.venue_id);
   const customerId = resolvedCustomerId ?? (userId ? await resolveCustomerIdForUser(admin, userId) : order.customer_id || null);
   const lineById = new Map(lines.map((line) => [line.id, line]));
+  const trackedVariantIds = Array.from(new Set(lines
+    .filter((line) => line.inventory_policy === 'tracked')
+    .map((line) => String(line.variant_id || '')).filter(Boolean)));
+  const [variantResult, listingResult, levelResult] = await Promise.all([
+    trackedVariantIds.length
+      ? admin.from('product_variants').select('*').in('id', trackedVariantIds)
+      : Promise.resolve({ data: [], error: null }),
+    admin.from('product_venue_listings').select('*').eq('venue_id', order.venue_id).in('product_id', productIds),
+    trackedVariantIds.length
+      ? admin.from('inventory_levels').select('*').in('variant_id', trackedVariantIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const trackedError = variantResult.error || listingResult.error || levelResult.error;
+  if (trackedError) throw new Error(trackedError.message);
+  const variantById = new Map((variantResult.data || []).map((row: any) => [String(row.id), row]));
+  const listingByProduct = new Map((listingResult.data || []).map((row: any) => [String(row.product_id), row]));
+  const levelByKey = new Map((levelResult.data || []).map((row: any) => [`${row.variant_id}:${row.location_id}`, row]));
   const resolved: any[] = [];
   for (const line of lines) {
     const product = productsById.get(line.product_id);
     if (!product) throw new Error('Product is no longer available');
-    if (product.venue_id !== order.venue_id || product.commerce_kind !== line.commerce_kind) {
+    if ((product.venue_id !== order.venue_id && product.inventory_policy !== 'tracked') || product.commerce_kind !== line.commerce_kind) {
       throw new Error('Product classification changed — review the cart again');
+    }
+    const tracked = product.inventory_policy === 'tracked' || line.inventory_policy === 'tracked';
+    const variant = tracked ? variantById.get(String(line.variant_id || '')) : null;
+    const listing = tracked ? listingByProduct.get(product.id) : null;
+    const level = tracked ? levelByKey.get(`${String(line.variant_id || '')}:${String(line.pickup_location_id || '')}`) : null;
+    if (tracked) {
+      if (product.inventory_policy !== 'tracked' || line.inventory_policy !== 'tracked'
+        || product.commerce_kind !== 'merchandise' || product.activity_addon_enabled
+        || line.parent_line_id || line.activity_session_id || line.source_type === 'activity_addon') {
+        throw new Error('tracked_activity_addon_unsupported');
+      }
+      if (venue.tracked_merch_sales_enabled !== true) throw new Error('Tracked merchandise sales are disabled');
+      if (!variant || variant.product_id !== product.id || variant.status !== 'active') throw new Error('Tracked variant changed — review the cart again');
+      if (!listing || listing.status !== 'active' || listing.tracked_sales_enabled !== true
+        || listing.default_inventory_location_id !== line.pickup_location_id
+        || listing.seller_franchisee_id !== line.variant_snapshot?.seller_franchisee_id) {
+        throw new Error('Tracked listing changed — review the cart again');
+      }
+      if (!level || level.incident_blocked) throw new Error('Tracked inventory is unavailable');
     }
     if (line.commerce_kind !== 'participation' && line.parent_line_id) {
       const parent = lineById.get(line.parent_line_id);
@@ -1033,8 +1247,13 @@ async function resolveLines(
       });
       if (!availability.eligible) throw new Error(availability.message || 'Participation is no longer available');
     }
-    let unitPriceMinor = Math.round(Number(product.base_price_sek || 0) * 100);
-    let resolverSnapshot: Record<string, unknown> = { pricing_source: 'product_base_price' };
+    let unitPriceMinor = tracked && variant.price_override_minor !== null
+      ? Number(variant.price_override_minor)
+      : Math.round(Number(product.base_price_sek || 0) * 100);
+    let resolverSnapshot: Record<string, unknown> = {
+      pricing_source: tracked && variant.price_override_minor !== null ? 'variant_price_override' : 'product_base_price',
+      ...(tracked ? { variant_id: variant.id, sku: variant.sku, listing_id: listing.id } : {}),
+    };
     if (line.commerce_kind === 'participation') {
       let purchaseKind: 'activity_ticket' | 'day_pass' | 'course' | 'league_team' = product.product_key === 'day_access' || product.product_kind === 'day_access'
         ? 'day_pass'
@@ -1206,6 +1425,21 @@ async function resolveLines(
       league_team_entry_id: line.league_team_entry_id,
       dependent_participant_id: line.dependent_participant_id,
       parent_line_id: line.parent_line_id,
+      variant_id: tracked ? variant.id : null,
+      sku: tracked ? variant.sku : null,
+      inventory_policy: tracked ? 'tracked' : 'stockless',
+      pickup_location_id: tracked ? line.pickup_location_id : null,
+      variant_snapshot: tracked ? {
+        ...(line.variant_snapshot || {}),
+        variant_id: variant.id,
+        sku: variant.sku,
+        title: variant.title || null,
+        image_url: variant.image_url || null,
+        option_signature: variant.option_signature,
+        price_override_minor: variant.price_override_minor,
+        seller_franchisee_id: listing.seller_franchisee_id,
+        listing_id: listing.id,
+      } : {},
       unit_price_minor: unitPriceMinor,
       discount_minor: 0,
       vat_rate: Number(product.vat_rate || 0),
@@ -1546,8 +1780,15 @@ function serializeDeskFulfillmentItem(
     fulfillment_status: line.fulfillment_status,
     fulfilled_at: line.fulfilled_at,
     pickup_instruction: DESK_PICKUP_INSTRUCTION,
-    pickup_eligible: ['paid', 'attention'].includes(order.status)
+    pickup_eligible: (line.inventory_policy === 'tracked' ? order.status === 'paid' : ['paid', 'attention'].includes(order.status))
       && ['pending_pickup', 'attention'].includes(line.fulfillment_status),
+    sku: line.sku || null,
+    variant_label: String(line.variant_snapshot?.title || '') || null,
+    collected_quantity: line.fulfillment_status === 'collected' && line.inventory_policy !== 'tracked'
+      ? Number(line.quantity || 0) : Number(line.collected_quantity || 0),
+    remaining_quantity: ['collected', 'not_collected'].includes(line.fulfillment_status)
+      ? 0
+      : Math.max(0, Number(line.quantity || 0) - Number(line.collected_quantity || 0) - Number(line.cancelled_quantity || 0)),
   };
 }
 
@@ -1557,14 +1798,14 @@ async function loadDeskFulfillmentItems(
   filter: { status?: string; lineId?: string; serviceDate?: string } = {},
 ): Promise<DeskFulfillmentItem[]> {
   let lineQuery = admin.from('commerce_order_lines')
-    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id, session_date, commerce_orders!inner(id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
+    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id, session_date, inventory_policy, sku, variant_snapshot, collected_quantity, cancelled_quantity, commerce_orders!inner(id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
     .eq('commerce_orders.venue_id', venueId)
     .in('commerce_orders.status', ['paid', 'attention'])
     .eq('fulfillment_type', 'desk_pickup')
     .order('created_at');
   if (filter.status) lineQuery = lineQuery.eq('fulfillment_status', filter.status);
   if (filter.lineId) lineQuery = lineQuery.eq('id', filter.lineId);
-  if (filter.serviceDate) lineQuery = lineQuery.eq('session_date', filter.serviceDate);
+  if (filter.serviceDate) lineQuery = lineQuery.or(`session_date.eq.${filter.serviceDate},session_date.is.null`);
   const { data: lineData, error: lineError } = await lineQuery;
   if (lineError) throw new Error(lineError.message);
   const lines = (lineData || []) as DeskFulfillmentLineWithOrderRow[];
@@ -1614,11 +1855,14 @@ const commerceHandler = async (req: Request) => {
     if (req.method === 'GET' && path === 'catalog') {
       const venueId = url.searchParams.get('venueId') || '';
       if (!venueId) return errorResponse('Missing venueId', 400);
-      const [venue, { data: products, error: productError }, { data: relationships, error: relationshipError }] = await Promise.all([
+      const [venue, { data: homeProducts, error: homeProductError }, { data: listings, error: listingError }, { data: relationships, error: relationshipError }] = await Promise.all([
         venueContext(admin, venueId),
         admin.from('access_products')
-          .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, is_active, standalone_enabled, activity_addon_enabled, category, sport, image_url')
+          .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, is_active, standalone_enabled, activity_addon_enabled, category, sport, image_url, inventory_policy, catalog_owner_organization_id')
           .eq('venue_id', venueId).eq('status', 'active').eq('is_active', true).order('sort_order'),
+        admin.from('product_venue_listings')
+          .select('id, product_id, venue_id, seller_franchisee_id, default_inventory_location_id, currency, status, tracked_sales_enabled')
+          .eq('venue_id', venueId).eq('status', 'active'),
         admin.from('product_relationships')
           .select('id, venue_id, source_product_id, target_product_id, relationship_type, is_active, sort_order, created_at')
           .eq('venue_id', venueId)
@@ -1629,8 +1873,68 @@ const commerceHandler = async (req: Request) => {
           .order('created_at')
           .order('id'),
       ]);
-      if (productError || relationshipError) throw new Error(productError?.message || relationshipError?.message);
-      const productRows = (products || []) as CommerceProduct[];
+      if (homeProductError || listingError || relationshipError) {
+        throw new Error(homeProductError?.message || listingError?.message || relationshipError?.message);
+      }
+      const listedProductIds = (listings || []).map((listing: any) => String(listing.product_id));
+      const { data: listedProducts, error: listedProductError } = listedProductIds.length
+        ? await admin.from('access_products')
+          .select('id, venue_id, product_key, product_kind, name, description, commerce_kind, fulfillment_type, fulfillment_presentation, base_price_sek, vat_rate, resolver_rules, sort_order, status, is_active, standalone_enabled, activity_addon_enabled, category, sport, image_url, inventory_policy, catalog_owner_organization_id')
+          .in('id', listedProductIds).eq('status', 'active').eq('is_active', true)
+        : { data: [], error: null };
+      if (listedProductError) throw new Error(listedProductError.message);
+      const productRows = Array.from(new Map(
+        [...(homeProducts || []), ...(listedProducts || [])].map((product: any) => [String(product.id), product]),
+      ).values()) as CommerceProduct[];
+      const trackedProductIds = productRows.filter((product) => product.inventory_policy === 'tracked').map((product) => product.id);
+      const { data: variants, error: variantError } = trackedProductIds.length
+        ? await admin.from('product_variants')
+          .select('id, product_id, sku, title, price_override_minor, image_url, option_signature, status')
+          .in('product_id', trackedProductIds).eq('status', 'active').order('sku')
+        : { data: [], error: null };
+      if (variantError) throw new Error(variantError.message);
+      const variantIds = (variants || []).map((variant: any) => String(variant.id));
+      const locationIds = (listings || []).map((listing: any) => String(listing.default_inventory_location_id));
+      const [{ data: assignments, error: assignmentError }, { data: optionValues, error: optionValueError }, { data: options, error: optionError }, { data: levels, error: levelError }, { data: locations, error: locationError }] = await Promise.all([
+        variantIds.length ? admin.from('product_variant_option_values').select('*').in('variant_id', variantIds) : Promise.resolve({ data: [], error: null }),
+        trackedProductIds.length ? admin.from('product_option_values').select('id, option_id, code, label, swatch, sort_order, status').eq('status', 'active') : Promise.resolve({ data: [], error: null }),
+        trackedProductIds.length ? admin.from('product_options').select('id, product_id, code, label, sort_order, status').in('product_id', trackedProductIds).eq('status', 'active') : Promise.resolve({ data: [], error: null }),
+        variantIds.length && locationIds.length ? admin.from('inventory_levels').select('variant_id, location_id, on_hand, reserved, allocated, incident_blocked').in('variant_id', variantIds).in('location_id', locationIds) : Promise.resolve({ data: [], error: null }),
+        locationIds.length ? admin.from('inventory_locations').select('id, venue_id, name, status').in('id', locationIds) : Promise.resolve({ data: [], error: null }),
+      ]);
+      const catalogDetailError = assignmentError || optionValueError || optionError || levelError || locationError;
+      if (catalogDetailError) throw new Error(catalogDetailError.message);
+      const listingByProduct = new Map((listings || []).map((row: any) => [String(row.product_id), row]));
+      const locationById = new Map((locations || []).map((row: any) => [String(row.id), row]));
+      const optionById = new Map((options || []).map((row: any) => [String(row.id), row]));
+      const valueById = new Map((optionValues || []).map((row: any) => [String(row.id), row]));
+      const levelByKey = new Map((levels || []).map((row: any) => [`${row.variant_id}:${row.location_id}`, row]));
+      const assignmentsByVariant = new Map<string, any[]>();
+      for (const assignment of assignments || []) {
+        const list = assignmentsByVariant.get(String(assignment.variant_id)) || [];
+        list.push(assignment);
+        assignmentsByVariant.set(String(assignment.variant_id), list);
+      }
+      const variantsByProduct = new Map<string, any[]>();
+      for (const variant of variants || []) {
+        const listing = listingByProduct.get(String(variant.product_id));
+        const level = listing ? levelByKey.get(`${variant.id}:${listing.default_inventory_location_id}`) : null;
+        const available = level && !level.incident_blocked
+          ? Number(level.on_hand) - Number(level.reserved) - Number(level.allocated)
+          : 0;
+        const optionFacts = (assignmentsByVariant.get(String(variant.id)) || []).flatMap((assignment: any) => {
+          const value = valueById.get(String(assignment.option_value_id));
+          const option = value ? optionById.get(String(value.option_id)) : null;
+          return value && option ? [{
+            option_id: option.id, option_code: option.code, option_label: option.label,
+            value_id: value.id, value_code: value.code, value_label: value.label, swatch: value.swatch,
+            sort_order: option.sort_order,
+          }] : [];
+        }).sort((left: any, right: any) => Number(left.sort_order) - Number(right.sort_order));
+        const list = variantsByProduct.get(String(variant.product_id)) || [];
+        list.push({ ...variant, options: optionFacts, available_to_sell: available, sold_out: available <= 0 });
+        variantsByProduct.set(String(variant.product_id), list);
+      }
       const visibleRelationships = visibleOfferedWithRelationships({
         products: productRows,
         relationships: (relationships || []) as OfferedWithRelationship[],
@@ -1639,6 +1943,11 @@ const commerceHandler = async (req: Request) => {
       });
       const relatedProductIds = new Set(visibleRelationships.map((relationship) => relationship.target_product_id));
       const availableProducts = productRows.filter((product) => {
+        if (product.inventory_policy === 'tracked') {
+          const listing = listingByProduct.get(product.id);
+          return venue.commerce_enabled === true && venue.tracked_merch_sales_enabled === true
+            && Boolean(listing?.tracked_sales_enabled) && listing?.status === 'active';
+        }
         if (product.commerce_kind === 'participation') {
           if ((product.product_key === 'day_access' || product.product_kind === 'day_access') && Number(product.base_price_sek || 0) <= 0) {
             return false;
@@ -1661,10 +1970,25 @@ const commerceHandler = async (req: Request) => {
       }).map((product) => ({
         ...product,
         max_quantity: productMaxQuantity(product),
-        store_eligible: evaluateCommerceAvailability(product, {
-          channel: 'standalone',
-          venueCommerceEnabled: venue.commerce_enabled === true,
-        }).eligible,
+        store_eligible: product.inventory_policy === 'tracked'
+          ? Boolean(listingByProduct.get(product.id)?.tracked_sales_enabled) && venue.tracked_merch_sales_enabled === true
+          : evaluateCommerceAvailability(product, {
+            channel: 'standalone',
+            venueCommerceEnabled: venue.commerce_enabled === true,
+          }).eligible,
+        ...(product.inventory_policy === 'tracked' ? {
+          variants: variantsByProduct.get(product.id) || [],
+          listing: (() => {
+            const listing = listingByProduct.get(product.id);
+            const location = listing ? locationById.get(String(listing.default_inventory_location_id)) : null;
+            return listing ? {
+              id: listing.id,
+              pickup_location_id: listing.default_inventory_location_id,
+              pickup_location_name: location?.name || null,
+              currency: listing.currency,
+            } : null;
+          })(),
+        } : {}),
       }));
       const availableProductIds = new Set(availableProducts.map((product) => product.id));
       return jsonResponse({
@@ -1922,7 +2246,7 @@ const commerceHandler = async (req: Request) => {
       if (order.status === 'checkout_pending') {
         const recovery = await reconcileExpiredFirstVisitCheckouts(admin, {
           orderId: order.id,
-          stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+          stripeKey: optionalStripeRuntimeEnvironment()?.stripeKey,
           stripeApiBase: STRIPE_API_BASE,
         });
         if (recovery.released > 0) order = await loadOrderByReference(admin, token, userId, true);
@@ -1944,11 +2268,18 @@ const commerceHandler = async (req: Request) => {
       if (['paid', 'attention'].includes(order.status)) {
         return jsonResponse({ ...(await cartResponse(admin, order)), checkout_cancelled: false }, 200, 0);
       }
+      if (order.status === 'checkout_pending' && order.checkout_attempt_id && !order.stripe_session_id) {
+        return jsonResponse({
+          ...(await cartResponse(admin, order)),
+          checkout_cancelled: false,
+          recovery_pending: true,
+          message: 'Betalningssessionen måste först stämmas av med Stripe.',
+        }, 202, 0);
+      }
       if (order.status !== 'checkout_pending' || !order.stripe_session_id) {
         return errorResponse('Betalningen kan inte avbrytas här.', 409);
       }
-      const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
-      if (!stripeKey) throw new Error('Stripe not configured');
+      const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
       let stripeSession = await retrieveStripeCheckoutSession(stripeKey, order.stripe_session_id);
       let decision = stripeCheckoutCancellationDecision(stripeSession);
       if (decision === 'verify_payment') {
@@ -1962,7 +2293,8 @@ const commerceHandler = async (req: Request) => {
       if (decision === 'expire_and_reopen') {
         try {
           await expireStripeCheckoutSession(stripeKey, order.stripe_session_id);
-          decision = 'reopen';
+          stripeSession = await retrieveStripeCheckoutSession(stripeKey, order.stripe_session_id);
+          decision = stripeCheckoutCancellationDecision(stripeSession);
         } catch (expiryError) {
           stripeSession = await retrieveStripeCheckoutSession(stripeKey, order.stripe_session_id);
           decision = stripeCheckoutCancellationDecision(stripeSession);
@@ -1978,6 +2310,21 @@ const commerceHandler = async (req: Request) => {
         }
       }
       if (decision !== 'reopen') return errorResponse('Betalningen kunde inte avbrytas säkert.', 409);
+
+      if (order.checkout_attempt_id) {
+        if (stripeSession.status !== 'expired') {
+          return errorResponse('Stripe har ännu inte bekräftat att sessionen är stängd.', 409);
+        }
+        const { error: closeError } = await admin.rpc('commerce_r2a_close_unpaid_attempt', {
+          p_attempt_id: order.checkout_attempt_id,
+          p_provider_session_id: order.stripe_session_id,
+          p_provider_status: 'expired',
+          p_reason: 'customer_requested_provider_expiry',
+        });
+        if (closeError) throw new Error(closeError.message);
+        order = await loadOrderByReference(admin, reference, userId, true);
+        return jsonResponse({ ...(await cartResponse(admin, order)), checkout_cancelled: true }, 200, 0);
+      }
 
       const lines = await loadOrderLines(admin, order.id);
       const holdIds = Array.from(new Set(lines.map((line) => String(line.capacity_hold_id || '')).filter(Boolean)));
@@ -2203,8 +2550,7 @@ const commerceHandler = async (req: Request) => {
           return errorResponse('Efter anmälningsstängning, schemapublicering eller seriestart hanteras lagavbokning manuellt av Pickla.', 409);
         }
         if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
-        const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
-        if (!stripeKey) throw new Error('Stripe not configured');
+        const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
         const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
         const { data: pending, error: pendingError } = await admin.from('commerce_orders').update({
           metadata: {
@@ -2231,8 +2577,7 @@ const commerceHandler = async (req: Request) => {
           return errorResponse('Kursen har redan startat och behöver hanteras manuellt.', 409);
         }
         if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
-        const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
-        if (!stripeKey) throw new Error('Stripe not configured');
+        const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
         const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
         const { data: pending, error: pendingError } = await admin.from('commerce_orders').update({
           metadata: {
@@ -2299,8 +2644,7 @@ const commerceHandler = async (req: Request) => {
       }
 
       if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
-      const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
-      if (!stripeKey) throw new Error('Stripe not configured');
+      const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
       const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
       const { data: pending, error: pendingError } = await admin.from('commerce_orders')
         .update({
@@ -2340,6 +2684,38 @@ const commerceHandler = async (req: Request) => {
       const body = await req.json();
       const token = String(body.token || '');
       const order = await loadOrderByReference(admin, token, userId);
+      if (order.status === 'checkout_pending' && order.checkout_attempt_id) {
+        const { data: attempt, error: attemptError } = await admin.from('commerce_checkout_attempts')
+          .select('id, status, provider_session_id, frozen_order_version')
+          .eq('id', order.checkout_attempt_id).eq('commerce_order_id', order.id).maybeSingle();
+        if (attemptError) throw new Error(attemptError.message);
+        if (attempt?.provider_session_id) {
+          const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
+          try {
+            const session = await retrieveStripeCheckoutSession(stripeKey, attempt.provider_session_id);
+            if (session.status === 'open' && session.url) {
+              return jsonResponse({
+                url: session.url,
+                order_id: order.id,
+                version: attempt.frozen_order_version,
+                attempt_id: attempt.id,
+                replayed: true,
+              }, 200, 0);
+            }
+          } catch (error) {
+            await admin.rpc('commerce_r2a_mark_provider_unresolved', {
+              p_attempt_id: attempt.id,
+              p_error: error instanceof Error ? error.message : 'Stripe lookup unresolved',
+            });
+          }
+        }
+        return jsonResponse({
+          recovery_pending: true,
+          order_id: order.id,
+          attempt_id: attempt?.id || order.checkout_attempt_id,
+          message: 'Den befintliga betalningssessionen kontrolleras. Ingen ny reservation har skapats.',
+        }, 202, 0);
+      }
       if (order.status !== 'draft') return errorResponse('Cart is not editable', 409);
       if (order.version !== Number(body.expected_version)) return errorResponse('Cart changed — review it again.', 409);
       const checkoutGuestEmail = body.guest_email ? String(body.guest_email).trim().toLowerCase() : order.guest_email;
@@ -2398,7 +2774,7 @@ const commerceHandler = async (req: Request) => {
       if (customerId) {
         await reconcileExpiredFirstVisitCheckouts(admin, {
           customerId,
-          stripeKey: Deno.env.get('STRIPE_SECRET_KEY'),
+          stripeKey: optionalStripeRuntimeEnvironment()?.stripeKey,
           stripeApiBase: STRIPE_API_BASE,
         });
       }
@@ -2495,15 +2871,115 @@ const commerceHandler = async (req: Request) => {
         }
       }
 
-      const { data: frozen, error: freezeError } = await admin.rpc('freeze_commerce_order', {
-        p_order_id: order.id,
-        p_expected_version: order.version,
-        p_lines: resolved,
-      }).maybeSingle();
-      const frozenOrder = frozen as RpcVersionRow | null;
-      if (freezeError || frozenOrder?.version == null) {
-        await releaseHold(admin, holdId, 'commerce_freeze_failed');
-        throw new Error(freezeError?.message || 'Cart freeze failed');
+      const hasTrackedInventory = resolved.some((line) => line.inventory_policy === 'tracked');
+      if (hasTrackedInventory && participation.length > 0) return errorResponse('tracked_activity_addon_unsupported', 409);
+      let stripeRuntime = optionalStripeRuntimeEnvironment();
+      let stripeKey = stripeRuntime?.stripeKey || '';
+      let customerEmail = order.guest_email || null;
+      if (userId && !customerEmail) {
+        const { data: authUser } = await admin.auth.admin.getUserById(userId);
+        customerEmail = authUser?.user?.email || null;
+      }
+      if (hasTrackedInventory && !stripeRuntime) throw new Error('Stripe not configured');
+      if (hasTrackedInventory && !customerEmail) return errorResponse('E-post krävs för kvitto och uthämtning.', 400);
+
+      const origin = canonicalPublicOrigin(req);
+      const successPath = safeLocalPath(body.success_path, `/commerce/confirmed?token=${encodeURIComponent(token)}`);
+      const cancelPath = safeLocalPath(body.cancel_path, `/today`);
+      let trackedAttemptId: string | null = null;
+      let trackedProviderIdempotencyKey: string | null = null;
+      let trackedProviderSessionId: string | null = null;
+      let stripeRequest: Record<string, unknown> | null = null;
+      let frozenOrder: RpcVersionRow | null = null;
+
+      if (hasTrackedInventory) {
+        const sellerIds = new Set(resolved
+          .filter((line) => line.inventory_policy === 'tracked')
+          .map((line) => String(line.variant_snapshot?.seller_franchisee_id || '')).filter(Boolean));
+        const locationIds = new Set(resolved
+          .filter((line) => line.inventory_policy === 'tracked')
+          .map((line) => String(line.pickup_location_id || '')).filter(Boolean));
+        if (sellerIds.size !== 1 || locationIds.size !== 1) return errorResponse('Tracked cart must use one seller and pickup location.', 409);
+        const sellerId = [...sellerIds][0];
+        const pickupLocationId = [...locationIds][0];
+        const { data: seller, error: sellerError } = await admin.from('franchisees')
+          .select('id, stripe_account_id, payout_currency, status').eq('id', sellerId).maybeSingle();
+        if (sellerError || !seller || seller.status !== 'active') throw new Error(sellerError?.message || 'Seller is not available');
+        if (String(seller.payout_currency || 'SEK').toUpperCase() !== String(order.currency || 'SEK').toUpperCase()) {
+          return errorResponse('Seller currency does not match cart.', 409);
+        }
+        if (seller.stripe_account_id) {
+          return errorResponse('Connected-account merchandise checkout is not supported in R2A.', 409);
+        }
+        trackedAttemptId = crypto.randomUUID();
+        trackedProviderIdempotencyKey = `commerce-r2a-checkout-${trackedAttemptId}`;
+        const expiresAtSeconds = Math.floor(Date.now() / 1000) + 31 * 60;
+        const providerEnvironment = stripeRuntime!.stripeMode;
+        const providerAccountKey = 'platform';
+        stripeRequest = {
+          payment_method_types: ['card'],
+          mode: 'payment',
+          customer_email: customerEmail,
+          client_reference_id: order.id,
+          line_items: resolved
+            .filter((line) => Number(line.unit_price_minor || 0) * Number(line.quantity || 1) > 0)
+            .map((line) => ({
+              price_data: {
+                currency: String(order.currency || 'SEK').toLowerCase(),
+                product_data: {
+                  name: line.product_name,
+                  description: line.variant_snapshot?.options?.map((option: any) => option.value_label).filter(Boolean).join(' / ') || undefined,
+                },
+                unit_amount: Number(line.unit_price_minor),
+                tax_behavior: 'inclusive',
+              },
+              quantity: Number(line.quantity || 1),
+            })),
+          metadata: {
+            commerce_order_id: order.id,
+            commerce_order_version: String(Number(order.version) + 1),
+            commerce_checkout_attempt_id: trackedAttemptId,
+            inventory_policy: 'tracked',
+            seller_franchisee_id: sellerId,
+            pickup_location_id: pickupLocationId,
+          },
+          expires_at: expiresAtSeconds,
+          success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${origin}${cancelPath}${cancelPath.includes('?') ? '&' : '?'}checkout=cancelled`,
+        };
+        const { data: prepared, error: prepareError } = await admin.rpc('commerce_r2a_prepare_checkout', {
+          p_attempt_id: trackedAttemptId,
+          p_order_id: order.id,
+          p_expected_version: order.version,
+          p_lines: resolved,
+          p_seller_franchisee_id: sellerId,
+          p_pickup_location_id: pickupLocationId,
+          p_provider_environment: providerEnvironment,
+          p_provider_account_key: providerAccountKey,
+          p_provider_idempotency_key: trackedProviderIdempotencyKey,
+          p_provider_request: stripeRequest,
+          p_expires_at: new Date(expiresAtSeconds * 1000).toISOString(),
+        }).maybeSingle();
+        const preparedAttempt = prepared as RpcTrackedAttemptRow | null;
+        if (prepareError || preparedAttempt?.version == null || !preparedAttempt.attempt_id) {
+          throw new Error(prepareError?.message || 'Tracked checkout preparation failed');
+        }
+        trackedAttemptId = preparedAttempt.attempt_id;
+        trackedProviderIdempotencyKey = preparedAttempt.provider_idempotency_key;
+        stripeRequest = preparedAttempt.provider_request;
+        trackedProviderSessionId = preparedAttempt.provider_session_id;
+        frozenOrder = preparedAttempt;
+      } else {
+        const { data: frozen, error: freezeError } = await admin.rpc('freeze_commerce_order', {
+          p_order_id: order.id,
+          p_expected_version: order.version,
+          p_lines: resolved,
+        }).maybeSingle();
+        frozenOrder = frozen as RpcVersionRow | null;
+        if (freezeError || frozenOrder?.version == null) {
+          await releaseHold(admin, holdId, 'commerce_freeze_failed');
+          throw new Error(freezeError?.message || 'Cart freeze failed');
+        }
       }
 
       if (Number(frozenOrder.total_inc_vat_minor || 0) === 0) {
@@ -2535,9 +3011,8 @@ const commerceHandler = async (req: Request) => {
         }
       }
 
-      const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
-      if (!stripeKey) throw new Error('Stripe not configured');
-      let customerEmail = order.guest_email || null;
+      stripeRuntime = stripeRuntime || requireStripeRuntimeEnvironment();
+      stripeKey = stripeRuntime.stripeKey;
       if (userId && !customerEmail) {
         const { data: authUser } = await admin.auth.admin.getUserById(userId);
         customerEmail = authUser?.user?.email || null;
@@ -2548,12 +3023,11 @@ const commerceHandler = async (req: Request) => {
         return errorResponse('E-post krävs för kvitto och uthämtning.', 400);
       }
 
-      const origin = canonicalPublicOrigin(req);
-      const successPath = safeLocalPath(body.success_path, `/commerce/confirmed?token=${encodeURIComponent(token)}`);
-      const cancelPath = safeLocalPath(body.cancel_path, `/today`);
       let stripeSession: StripeCheckoutSession;
       try {
-        stripeSession = await createStripeCheckoutSession(stripeKey, {
+        stripeSession = trackedProviderSessionId
+          ? await retrieveStripeCheckoutSession(stripeKey, trackedProviderSessionId)
+          : await createStripeCheckoutSession(stripeKey, stripeRequest || {
           payment_method_types: ['card'],
           mode: 'payment',
           customer_email: customerEmail,
@@ -2580,20 +3054,41 @@ const commerceHandler = async (req: Request) => {
             : {}),
           success_url: `${origin}${successPath}${successPath.includes('?') ? '&' : '?'}session={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${cancelPath}${cancelPath.includes('?') ? '&' : '?'}checkout=cancelled`,
-        });
+          }, trackedProviderIdempotencyKey || undefined);
       } catch (error) {
+        if (trackedAttemptId) {
+          await admin.rpc('commerce_r2a_mark_provider_unresolved', {
+            p_attempt_id: trackedAttemptId,
+            p_error: error instanceof Error ? error.message : 'Stripe session creation unresolved',
+          });
+          return jsonResponse({
+            recovery_pending: true,
+            order_id: order.id,
+            attempt_id: trackedAttemptId,
+            message: 'Betalningssessionen kontrolleras. Lagret är reserverat och ett nytt köp har inte skapats.',
+          }, 202, 0);
+        }
         await releaseHold(admin, holdId, 'commerce_stripe_create_failed');
         await admin.rpc('reopen_commerce_order_after_checkout_failure', { p_order_id: order.id, p_version: frozenOrder.version });
         throw error;
       }
 
       try {
-        const { data: attached, error: attachError } = await admin.rpc('attach_commerce_order_stripe_session', {
-          p_order_id: order.id,
-          p_version: frozenOrder.version,
-          p_stripe_session_id: stripeSession.id,
-        });
-        if (attachError || !attached) throw new Error(attachError?.message || 'Could not attach Stripe session');
+        if (trackedAttemptId) {
+          const { data: attached, error: attachError } = await admin.rpc('commerce_r2a_attach_checkout_session', {
+            p_attempt_id: trackedAttemptId,
+            p_provider_session_id: stripeSession.id,
+            p_provider_response: { id: stripeSession.id, url: stripeSession.url, status: stripeSession.status, expires_at: stripeSession.expires_at },
+          });
+          if (attachError || !attached) throw new Error(attachError?.message || 'Could not attach tracked Stripe session');
+        } else {
+          const { data: attached, error: attachError } = await admin.rpc('attach_commerce_order_stripe_session', {
+            p_order_id: order.id,
+            p_version: frozenOrder.version,
+            p_stripe_session_id: stripeSession.id,
+          });
+          if (attachError || !attached) throw new Error(attachError?.message || 'Could not attach Stripe session');
+        }
         if (holdId) {
           const { data: holdAttached, error: holdAttachError } = await admin.rpc('attach_capacity_hold_stripe_session', {
             p_hold_id: holdId,
@@ -2602,6 +3097,19 @@ const commerceHandler = async (req: Request) => {
           if (holdAttachError || !holdAttached) throw new Error(holdAttachError?.message || 'Could not attach Stripe session to hold');
         }
       } catch (error) {
+        if (trackedAttemptId) {
+          await admin.rpc('commerce_r2a_mark_provider_unresolved', {
+            p_attempt_id: trackedAttemptId,
+            p_error: error instanceof Error ? error.message : 'Stripe session attachment unresolved',
+          });
+          return jsonResponse({
+            recovery_pending: true,
+            order_id: order.id,
+            attempt_id: trackedAttemptId,
+            checkout_session_id: stripeSession.id,
+            message: 'Betalningssessionen skapades och återställs säkert. Lagret förblir reserverat.',
+          }, 202, 0);
+        }
         await expireStripeCheckoutSession(stripeKey, stripeSession.id).catch((expiryError) => {
           console.error('Could not expire unattached Stripe Checkout Session', expiryError);
         });
@@ -2619,7 +3127,12 @@ const commerceHandler = async (req: Request) => {
         activitySessionId: String(participation[0]?.activity_session_id || '') || null,
         journeyId: body.journey_id,
       });
-      return jsonResponse({ url: stripeSession.url, order_id: order.id, version: frozenOrder.version });
+      return jsonResponse({
+        url: stripeSession.url,
+        order_id: order.id,
+        version: frozenOrder.version,
+        ...(trackedAttemptId ? { attempt_id: trackedAttemptId } : {}),
+      });
     }
 
     if (req.method === 'GET' && path === 'my-orders') {
@@ -2717,15 +3230,182 @@ const commerceHandler = async (req: Request) => {
       return jsonResponse({ items: items || [] }, 200, 15);
     }
 
+    if (req.method === 'GET' && path === 'inventory-operations') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff']);
+      const { data: locations, error: locationError } = await admin.from('inventory_locations')
+        .select('*').eq('venue_id', venueId).order('name');
+      if (locationError) throw new Error(locationError.message);
+      const locationIds = (locations || []).map((location: any) => location.id);
+      const [{ data: listings, error: listingError }, { data: levels, error: levelError }, { data: incidents, error: incidentError }, { data: attempts, error: attemptError }, { data: refunds, error: refundError }, { data: allocations, error: allocationError }] = await Promise.all([
+        admin.from('product_venue_listings').select('*, access_products(id, product_key, name, inventory_policy)').eq('venue_id', venueId).order('created_at'),
+        locationIds.length ? admin.from('inventory_levels').select('*, product_variants(id, product_id, sku, title, status)').in('location_id', locationIds).order('updated_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
+        locationIds.length ? admin.from('inventory_incidents').select('*, inventory_levels!inner(location_id, variant_id)').in('inventory_levels.location_id', locationIds).order('opened_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+        locationIds.length ? admin.from('commerce_checkout_attempts').select('id, commerce_order_id, status, provider_session_id, provider_payment_intent_id, expires_at, recovery_after, recovery_attempts, last_error, created_at').in('pickup_location_id', locationIds).in('status', ['prepared', 'provider_creation_unresolved', 'open', 'payment_processing', 'attention']).order('created_at').limit(100) : Promise.resolve({ data: [], error: null }),
+        locationIds.length ? admin.from('commerce_refunds').select('*, commerce_refund_lines(*)').in('pickup_location_id', locationIds).order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+        locationIds.length ? admin.from('inventory_allocations')
+          .select('*, commerce_order_lines(id, product_name, sku, quantity, collected_quantity, cancelled_quantity, fulfillment_status, variant_snapshot), commerce_orders(id, status, guest_name, stripe_payment_intent_id, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
+          .in('location_id', locationIds).order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+      ]);
+      const operationError = listingError || levelError || incidentError || attemptError || refundError || allocationError;
+      if (operationError) throw new Error(operationError.message);
+      const levelIds = (levels || []).map((level: any) => level.id);
+      const { data: movements, error: movementError } = locationIds.length
+        ? await admin.from('inventory_movements').select('*').in('location_id', locationIds).order('occurred_at', { ascending: false }).limit(200)
+        : { data: [], error: null };
+      if (movementError) throw new Error(movementError.message);
+      return jsonResponse({
+        locations: locations || [], listings: listings || [],
+        levels: (levels || []).map((level: any) => ({
+          ...level,
+          available_to_sell: Number(level.on_hand) - Number(level.reserved) - Number(level.allocated),
+        })),
+        movements: movements || [], incidents: incidents || [], attempts: attempts || [], refunds: refunds || [], allocations: allocations || [],
+        reconciliation: {
+          checked_level_count: levelIds.length,
+          formula: 'on_hand - reserved - allocated',
+        },
+      }, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'inventory-receive') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const body = await req.json();
+      const venueId = String(body.venue_id || '').trim();
+      await requireVenueRole(admin, userId, venueId, ['venue_admin']);
+      const { data, error } = await admin.rpc('commerce_r2a_receive_inventory', {
+        p_variant_id: body.variant_id,
+        p_location_id: body.location_id,
+        p_quantity: Math.floor(Number(body.quantity || 0)),
+        p_reason: String(body.reason || ''),
+        p_reference: String(body.reference || ''),
+        p_idempotency_key: String(body.idempotency_key || req.headers.get('x-request-id') || crypto.randomUUID()),
+        p_actor_user_id: userId,
+      }).maybeSingle();
+      if (error) throw new Error(error.message);
+      return jsonResponse({ inventory: data }, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'inventory-correct') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const body = await req.json();
+      const venueId = String(body.venue_id || '').trim();
+      await requireVenueRole(admin, userId, venueId, ['venue_admin']);
+      const { data, error } = await admin.rpc('commerce_r2a_correct_inventory', {
+        p_variant_id: body.variant_id,
+        p_location_id: body.location_id,
+        p_physical_on_hand: Math.floor(Number(body.physical_on_hand)),
+        p_expected_version: Math.floor(Number(body.expected_version)),
+        p_allow_shortage: body.allow_shortage === true,
+        p_reason: String(body.reason || ''),
+        p_idempotency_key: String(body.idempotency_key || req.headers.get('x-request-id') || crypto.randomUUID()),
+        p_actor_user_id: userId,
+      }).maybeSingle();
+      if (error) throw new Error(error.message);
+      return jsonResponse({ inventory: data }, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'inventory-incident-resolve') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const body = await req.json();
+      const venueId = String(body.venue_id || '').trim();
+      await requireVenueRole(admin, userId, venueId, ['venue_admin']);
+      const { data, error } = await admin.rpc('commerce_r2a_resolve_inventory_incident', {
+        p_incident_id: body.incident_id,
+        p_evidence: body.evidence || {},
+        p_idempotency_key: String(body.idempotency_key || req.headers.get('x-request-id') || crypto.randomUUID()),
+        p_actor_user_id: userId,
+      });
+      if (error) throw new Error(error.message);
+      return jsonResponse({ incident: data }, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'refund') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const body = await req.json();
+      const venueId = String(body.venue_id || '').trim();
+      await requireVenueRole(admin, userId, venueId, ['venue_admin']);
+      const { data: order, error: orderError } = await admin.from('commerce_orders')
+        .select('id, venue_id, stripe_payment_intent_id, checkout_attempt_id')
+        .eq('id', body.order_id).eq('venue_id', venueId).maybeSingle();
+      if (orderError || !order?.stripe_payment_intent_id || !order.checkout_attempt_id) {
+        return errorResponse(orderError?.message || 'Tracked paid order not found', 404);
+      }
+      const stripeRuntime = requireStripeRuntimeEnvironment();
+      const stripeKey = stripeRuntime.stripeKey;
+      const idempotencyKey = String(body.idempotency_key || req.headers.get('x-request-id') || crypto.randomUUID());
+      const providerEnvironment = stripeRuntime.stripeMode;
+      const { data: prepared, error: prepareError } = await admin.rpc('commerce_r2a_prepare_refund', {
+        p_order_id: order.id,
+        p_line_quantities: Array.isArray(body.lines) ? body.lines : null,
+        p_goodwill_amount_minor: body.goodwill_amount_minor == null ? null : Math.floor(Number(body.goodwill_amount_minor)),
+        p_reason: String(body.reason || ''),
+        p_provider_environment: providerEnvironment,
+        p_provider_account_key: 'platform',
+        p_idempotency_key: idempotencyKey,
+        p_actor_user_id: userId,
+      });
+      if (prepareError || !prepared?.id) throw new Error(prepareError?.message || 'Refund preparation failed');
+      try {
+        const providerRefund = await createTrackedStripeRefund(stripeKey, {
+          paymentIntentId: order.stripe_payment_intent_id,
+          orderId: order.id,
+          refundId: prepared.id,
+          amountMinor: Number(prepared.amount_inc_vat_minor),
+          idempotencyKey: String(prepared.provider_idempotency_key),
+        });
+        const { data: reconciled, error: reconcileError } = await admin.rpc('commerce_r2a_reconcile_refund', {
+          p_refund_id: prepared.id,
+          p_provider_refund_id: providerRefund.id,
+          p_provider_status: providerRefund.status,
+          p_provider_response: providerRefund,
+          p_error: null,
+        });
+        if (reconcileError) throw new Error(reconcileError.message);
+        return jsonResponse({ refund: reconciled }, providerRefund.status === 'succeeded' ? 200 : 202, 0);
+      } catch (error) {
+        await admin.from('commerce_refunds').update({
+          status: 'attention',
+          last_error: error instanceof Error ? error.message.slice(0, 1000) : 'Stripe refund state unresolved',
+        }).eq('id', prepared.id).in('status', ['preparing', 'pending']);
+        return jsonResponse({
+          refund: { ...prepared, status: 'attention' },
+          recovery_pending: true,
+          message: 'Återbetalningen måste stämmas av med Stripe innan ett nytt försök görs.',
+        }, 202, 0);
+      }
+    }
+
+    if (req.method === 'POST' && path === 'physical-disposition') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const body = await req.json();
+      const venueId = String(body.venue_id || '').trim();
+      await requireVenueRole(admin, userId, venueId, ['venue_admin']);
+      const { data, error } = await admin.rpc('commerce_r2a_record_disposition', {
+        p_order_line_id: body.line_id,
+        p_quantity: Math.floor(Number(body.quantity || 0)),
+        p_outcome: String(body.outcome || ''),
+        p_refund_id: body.refund_id || null,
+        p_reason: String(body.reason || ''),
+        p_idempotency_key: String(body.idempotency_key || req.headers.get('x-request-id') || crypto.randomUUID()),
+        p_actor_user_id: userId,
+      });
+      if (error) throw new Error(error.message);
+      return jsonResponse({ disposition: data }, 200, 0);
+    }
+
     if (req.method === 'GET' && path === 'fulfillment') {
       if (!userId) return errorResponse('Unauthorized', 401);
       const venueId = url.searchParams.get('venueId') || '';
       await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff']);
       const status = url.searchParams.get('status') || 'pending_pickup';
       const serviceDate = String(url.searchParams.get('date') || '').trim();
-      const parsedServiceDate = DateTime.fromISO(serviceDate, { zone: 'Europe/Stockholm' });
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate) || !parsedServiceDate.isValid || parsedServiceDate.toISODate() !== serviceDate) {
-        return errorResponse('Invalid fulfillment date', 400);
+      if (serviceDate) {
+        const parsedServiceDate = DateTime.fromISO(serviceDate, { zone: 'Europe/Stockholm' });
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDate) || !parsedServiceDate.isValid || parsedServiceDate.toISODate() !== serviceDate) {
+          return errorResponse('Invalid fulfillment date', 400);
+        }
       }
       const items = await loadDeskFulfillmentItems(admin, venueId, { status, serviceDate });
       return jsonResponse({ items }, 200, 5);
@@ -2742,13 +3422,24 @@ const commerceHandler = async (req: Request) => {
       if (lineError || !line) return errorResponse('Fulfillment line not found', 404);
       const linkedOrder = Array.isArray(line.commerce_orders) ? line.commerce_orders[0] : line.commerce_orders;
       if (linkedOrder?.venue_id !== venueId) return errorResponse('Forbidden', 403);
-      const { error } = await admin.rpc('transition_commerce_fulfillment', {
-        p_line_id: body.line_id,
-        p_next_status: body.status,
-        p_actor_user_id: userId,
-        p_request_id: req.headers.get('x-request-id') || crypto.randomUUID(),
-        p_metadata: { source: 'api-commerce' },
-      });
+      const { data: inventoryLine } = await admin.from('commerce_order_lines')
+        .select('inventory_policy').eq('id', body.line_id).maybeSingle();
+      const requestId = String(body.idempotency_key || req.headers.get('x-request-id') || crypto.randomUUID());
+      const { error } = inventoryLine?.inventory_policy === 'tracked'
+        ? await admin.rpc('commerce_r2a_collect_pickup', {
+          p_order_line_id: body.line_id,
+          p_quantity: Math.floor(Number(body.quantity || 1)),
+          p_venue_id: venueId,
+          p_idempotency_key: requestId,
+          p_actor_user_id: userId,
+        })
+        : await admin.rpc('transition_commerce_fulfillment', {
+          p_line_id: body.line_id,
+          p_next_status: body.status,
+          p_actor_user_id: userId,
+          p_request_id: requestId,
+          p_metadata: { source: 'api-commerce' },
+        });
       if (error) throw new Error(error.message);
       const [item] = await loadDeskFulfillmentItems(admin, venueId, { lineId: body.line_id });
       if (!item) throw new Error('Fulfillment line not found');
@@ -2764,6 +3455,9 @@ const commerceHandler = async (req: Request) => {
     if (message === 'Cart expired') return errorResponse(message, 410);
     if (message === 'Shop cart owner conflict') return errorResponse(message, 409);
     if (message.includes('stale_cart_version')) return errorResponse('Cart changed — review it again.', 409);
+    if (message.includes('sold_out')) return errorResponse('Den valda varianten är slutsåld.', 409);
+    if (message.includes('tracked_activity_addon_unsupported')) return errorResponse('Lagerspårade varor kan bara köpas fristående i R2A.', 409);
+    if (message.includes('inventory_incident_blocked')) return errorResponse('Varan är tillfälligt blockerad för lageravstämning.', 409);
     if (message.includes('not found') || message.includes('not_found')) return errorResponse(message, 404);
     if (message.includes('Platsen hann tas')) return errorResponse(message, 409);
     if (message.includes('Kursen är fullbokad')) return errorResponse(message, 409);

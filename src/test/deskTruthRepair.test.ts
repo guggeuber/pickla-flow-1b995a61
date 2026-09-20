@@ -49,11 +49,11 @@ describe("Desk OS truth repair #1", () => {
     expect(index).not.toContain("Hela hallen i realtid");
   });
 
-  it("date-scopes Today fulfillment by canonical service date", () => {
+  it("date-scopes scheduled fulfillment while retaining undated merchandise pickup obligations", () => {
     expect(today).toContain('status: "pending_pickup", date: today');
     expect(today).toContain('status: "collected", date: today');
     expect(commerceApi).toContain("filter: { status?: string; lineId?: string; serviceDate?: string }");
-    expect(commerceApi).toContain("lineQuery = lineQuery.eq('session_date', filter.serviceDate)");
+    expect(commerceApi).toContain("lineQuery = lineQuery.or(`session_date.eq.${filter.serviceDate},session_date.is.null`)");
     expect(commerceApi).toContain("loadDeskFulfillmentItems(admin, venueId, { status, serviceDate })");
     expect(commerceApi).not.toContain("created_at', filter.serviceDate");
   });

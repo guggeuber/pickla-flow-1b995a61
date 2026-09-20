@@ -18,6 +18,8 @@ functions=(
   api-auth
   api-bookings
   api-checkins
+  api-commerce
+  api-commerce-recovery
   api-corporate
   api-customers
   api-day-passes

@@ -9,6 +9,7 @@ import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { apiPost } from "@/lib/api";
 import {
   COMMERCE_PICKUP_COPY,
+  commerceCartItemKey,
   commerceJourneyId,
   cancelCommerceCheckout,
   fetchCommerceOrder,
@@ -74,7 +75,7 @@ export default function CommerceCartPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user, loading: authLoading } = useAuth();
-  const checkoutInFlight = useRef<Promise<{ url?: string; free?: boolean; redirect?: string }> | null>(null);
+  const checkoutInFlight = useRef<Promise<{ url?: string; free?: boolean; redirect?: string; recovery_pending?: boolean; message?: string }> | null>(null);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [guestSessionFallback, setGuestSessionFallback] = useState(false);
@@ -219,7 +220,7 @@ export default function CommerceCartPage() {
   const checkout = useMutation({
     mutationFn: () => {
       if (checkoutInFlight.current) return checkoutInFlight.current;
-      const sendCheckout = (auth: "session" | "omit") => apiPost<{ url?: string; free?: boolean; redirect?: string }>("api-commerce", "checkout", {
+      const sendCheckout = (auth: "session" | "omit") => apiPost<{ url?: string; free?: boolean; redirect?: string; recovery_pending?: boolean; message?: string }>("api-commerce", "checkout", {
         token,
         expected_version: orderQuery.data?.order.version,
         guest_email: email.trim() || null,
@@ -255,6 +256,10 @@ export default function CommerceCartPage() {
       }
       if (result.free && result.redirect) navigate(result.redirect, { replace: true });
       else if (result.url) window.location.assign(result.url);
+      else if (result.recovery_pending) {
+        toast.info(result.message || "Betalningssessionen kontrolleras. Försök igen om en stund.");
+        void orderQuery.refetch();
+      }
       else toast.error("Kassan kunde inte öppnas");
     },
     onError: async (error: Error) => {
@@ -342,6 +347,11 @@ export default function CommerceCartPage() {
         ) : null}
         <section className={activity || course ? "border-t border-black/10" : ""}>
           {visibleLines.map((line) => {
+            const cartItemKey = commerceCartItemKey({
+              product_id: String(line.product_id || ""),
+              variant_id: line.variant_id || undefined,
+              pickup_location_id: line.pickup_location_id || undefined,
+            });
             const isActivityParticipationLine = Boolean(activity) && line.commerce_kind === "participation";
             const isCourseLine = Boolean(course) && line.resolver_snapshot?.purchase_kind === "course";
             const isDayPassLine = line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass";
@@ -363,16 +373,17 @@ export default function CommerceCartPage() {
                   <LineIcon data-testid={line.commerce_kind === "participation" ? "commerce-line-ticket-icon" : "commerce-line-product-icon"} className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                   <div className="min-w-0">
                     <p className="font-bold">{lineName}</p>
+                    {line.variant_snapshot?.options?.length ? <p className="mt-1 text-xs font-semibold text-slate-700">{line.variant_snapshot.options.map((option) => option.value_label).join(" / ")} · SKU {line.sku}</p> : null}
                     {frozenSeriesPriceLabel ? <p className="mt-1 text-xs font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{frozenSeriesPriceLabel}</p> : null}
                     {lineMetadata ? <p className="mt-1 text-xs leading-relaxed text-slate-600">{lineMetadata}</p> : null}
                     {standaloneShopCart ? (
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [String(line.product_id)]: Math.max(0, Number(line.quantity) - 1) }).catch(() => undefined)} className="grid h-9 w-9 place-items-center rounded-full border border-black/15" aria-label={`Minska ${line.product_name}`}><Minus className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [cartItemKey]: Math.max(0, Number(line.quantity) - 1) }).catch(() => undefined)} className="grid h-9 w-9 place-items-center rounded-full border border-black/15" aria-label={`Minska ${line.product_name}`}><Minus className="h-4 w-4" /></button>
                           <span className="w-5 text-center font-black" aria-live="polite">{line.quantity}</span>
-                          <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [String(line.product_id)]: Math.min(Number(line.product_snapshot?.max_quantity || 20), Number(line.quantity) + 1) }).catch(() => undefined)} disabled={Number(line.quantity) >= Number(line.product_snapshot?.max_quantity || 20)} className="grid h-9 w-9 place-items-center rounded-full bg-slate-950 text-white disabled:bg-slate-300" aria-label={`Öka ${line.product_name}`}><Plus className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [cartItemKey]: Math.min(Number(line.product_snapshot?.max_quantity || 20), Number(line.quantity) + 1) }).catch(() => undefined)} disabled={Number(line.quantity) >= Number(line.product_snapshot?.max_quantity || 20)} className="grid h-9 w-9 place-items-center rounded-full bg-slate-950 text-white disabled:bg-slate-300" aria-label={`Öka ${line.product_name}`}><Plus className="h-4 w-4" /></button>
                         </div>
-                        <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [String(line.product_id)]: 0 }).catch(() => undefined)} className="inline-flex h-9 items-center gap-1 px-2 text-xs font-bold text-slate-500" aria-label={`Ta bort ${line.product_name}`}><Trash2 className="h-3.5 w-3.5" />Ta bort</button>
+                        <button type="button" onClick={() => void queueStandaloneUpdate({ ...visibleQuantities, [cartItemKey]: 0 }).catch(() => undefined)} className="inline-flex h-9 items-center gap-1 px-2 text-xs font-bold text-slate-500" aria-label={`Ta bort ${line.product_name}`}><Trash2 className="h-3.5 w-3.5" />Ta bort</button>
                       </div>
                     ) : null}
                   </div>

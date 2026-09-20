@@ -12,6 +12,7 @@ import {
 } from "@/lib/adminProductCatalog";
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
 import { Switch } from "@/components/ui/switch";
+import AdminTrackedMerch from "@/components/admin/AdminTrackedMerch";
 
 interface AccessProduct {
   id: string;
@@ -40,6 +41,8 @@ interface AccessProduct {
   sales_state_label?: string;
   sales_block_reason?: string | null;
   store_path?: string | null;
+  inventory_policy?: "stockless" | "tracked";
+  catalog_owner_organization_id?: string | null;
 }
 
 interface ProductRelationship {
@@ -63,6 +66,8 @@ interface ProductDraft {
   category: string;
   sport: string;
   imageUrl: string;
+  commerceKind: "rental" | "merchandise";
+  inventoryPolicy: "stockless" | "tracked";
 }
 
 const PAGE_SIZE = 50;
@@ -80,6 +85,8 @@ const emptyDraft = (): ProductDraft => ({
   category: "",
   sport: "",
   imageUrl: "",
+  commerceKind: "merchandise",
+  inventoryPolicy: "stockless",
 });
 
 const draftFromProduct = (product: AccessProduct): ProductDraft => ({
@@ -94,6 +101,8 @@ const draftFromProduct = (product: AccessProduct): ProductDraft => ({
   category: product.category || "",
   sport: product.sport || "",
   imageUrl: product.image_url || "",
+  commerceKind: product.commerce_kind === "rental" ? "rental" : "merchandise",
+  inventoryPolicy: product.inventory_policy || "stockless",
 });
 
 const keyFromName = (name: string) => name.trim().toLowerCase()
@@ -229,10 +238,17 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
         category: draft.category.trim() || null,
         sport: draft.sport.trim() || null,
         image_url: draft.imageUrl.trim() || null,
+        commerce_kind: draft.commerceKind,
+        inventory_policy: draft.inventoryPolicy,
       };
       if (selectedProduct?.commerce_kind !== "participation") {
         body.standalone_enabled = draft.standaloneEnabled;
-        body.activity_addon_enabled = draft.activityAddonEnabled;
+        body.activity_addon_enabled = draft.inventoryPolicy === "tracked" ? false : draft.activityAddonEnabled;
+        if (draft.inventoryPolicy === "tracked") {
+          body.commerce_kind = "merchandise";
+          body.standalone_enabled = true;
+          body.fulfillment_presentation = "desk_pickup";
+        }
       }
       let saved: AccessProduct;
       if (selectedProduct) {
@@ -364,6 +380,12 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
               <div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-muted-foreground">Pris<input type="number" min="0" value={draft.price} onChange={(event) => setDraft((current) => ({ ...current, price: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label><label className="block text-xs font-semibold text-muted-foreground">Moms %<input type="number" min="0" max="100" step="0.01" value={draft.vatRate} onChange={(event) => setDraft((current) => ({ ...current, vatRate: event.target.value }))} className={`${inputClass} mt-1 text-foreground`} /></label></div>
               <label className="block text-xs font-semibold text-muted-foreground">Status<select aria-label="Produktstatus" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ProductCatalogStatus }))} className={`${inputClass} mt-1 text-foreground`}><option value="draft">Utkast</option><option value="active">Aktiv</option><option value="archived">Arkiverad</option></select></label>
               <div className="grid grid-cols-2 gap-2"><label className="block text-xs font-semibold text-muted-foreground">Kategori<input value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} placeholder="T.ex. Hyra" className={`${inputClass} mt-1 text-foreground`} /></label><label className="block text-xs font-semibold text-muted-foreground">Sport<input value={draft.sport} onChange={(event) => setDraft((current) => ({ ...current, sport: event.target.value }))} placeholder="Valfritt" className={`${inputClass} mt-1 text-foreground`} /></label></div>
+              {selectedProduct?.commerce_kind !== "participation" ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block text-xs font-semibold text-muted-foreground">Varutyp<select value={draft.commerceKind} disabled={draft.inventoryPolicy === "tracked"} onChange={(event) => setDraft((current) => ({ ...current, commerceKind: event.target.value as ProductDraft["commerceKind"] }))} className={`${inputClass} mt-1 text-foreground`}><option value="merchandise">Fysisk vara</option><option value="rental">Hyra</option></select></label>
+                  <label className="block text-xs font-semibold text-muted-foreground">Lagerpolicy<select value={draft.inventoryPolicy} disabled={draft.commerceKind === "rental"} onChange={(event) => setDraft((current) => ({ ...current, inventoryPolicy: event.target.value as ProductDraft["inventoryPolicy"], commerceKind: event.target.value === "tracked" ? "merchandise" : current.commerceKind, standaloneEnabled: event.target.value === "tracked" ? true : current.standaloneEnabled, activityAddonEnabled: event.target.value === "tracked" ? false : current.activityAddonEnabled, fulfillment: event.target.value === "tracked" ? "desk_pickup" : current.fulfillment }))} className={`${inputClass} mt-1 text-foreground`}><option value="stockless">Utan lagersaldo</option><option value="tracked">Spårat per variant</option></select></label>
+                </div>
+              ) : null}
               <label className="block text-xs font-semibold text-muted-foreground">Bildlänk<div className="relative mt-1"><ImageIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input value={draft.imageUrl} onChange={(event) => setDraft((current) => ({ ...current, imageUrl: event.target.value }))} placeholder="https://…" className={`${inputClass} pl-9 text-foreground`} /></div></label>
             </section>
 
@@ -374,7 +396,7 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
               ) : (
                 <>
                   <label className="flex items-center justify-between gap-4"><span><span className="block text-sm font-semibold">Säljs fristående i butiken</span><span className="block text-xs text-muted-foreground">Kunden kan köpa produkten utan en aktivitet.</span></span><Switch checked={draft.standaloneEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, standaloneEnabled: checked }))} /></label>
-                  <label className="flex items-center justify-between gap-4"><span><span className="block text-sm font-semibold">Kan läggas till på aktivitet</span><span className="block text-xs text-muted-foreground">Kräver att minst en aktivitet väljs nedan.</span></span><Switch checked={draft.activityAddonEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, activityAddonEnabled: checked }))} /></label>
+                  <label className="flex items-center justify-between gap-4"><span><span className="block text-sm font-semibold">Kan läggas till på aktivitet</span><span className="block text-xs text-muted-foreground">{draft.inventoryPolicy === "tracked" ? "Lagerspårade varor är endast fristående i R2A." : "Kräver att minst en aktivitet väljs nedan."}</span></span><Switch checked={draft.activityAddonEnabled} disabled={draft.inventoryPolicy === "tracked"} onCheckedChange={(checked) => setDraft((current) => ({ ...current, activityAddonEnabled: checked }))} /></label>
                 </>
               )}
               {selectedProduct && (
@@ -400,12 +422,14 @@ export default function AdminProducts({ venueId }: { venueId: string }) {
                 <p className="mt-2 text-sm text-muted-foreground">Deltagande</p>
               ) : (
                 <div className="mt-3 grid grid-cols-3 gap-2">
-                  {([['desk_pickup', 'Hämtas vid disken'], ['digital', 'Digital'], ['participation', 'Deltagande']] as const).map(([value, label]) => <button key={value} type="button" onClick={() => setDraft((current) => ({ ...current, fulfillment: value }))} className={`min-h-12 rounded-lg border px-2 text-xs font-semibold ${draft.fulfillment === value ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground"}`}>{label}</button>)}
+                  {([['desk_pickup', 'Hämtas vid disken'], ['digital', 'Digital'], ['participation', 'Deltagande']] as const).map(([value, label]) => <button key={value} type="button" disabled={draft.inventoryPolicy === "tracked" && value !== "desk_pickup"} onClick={() => setDraft((current) => ({ ...current, fulfillment: value }))} className={`min-h-12 rounded-lg border px-2 text-xs font-semibold disabled:opacity-35 ${draft.fulfillment === value ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground"}`}>{label}</button>)}
                 </div>
               )}
             </section>
 
-            {selectedProduct && <RelationshipSelector product={{ ...selectedProduct, activity_addon_enabled: draft.activityAddonEnabled }} products={products} relationships={relationships} onToggle={(sourceId, targetId, relationshipId) => relationshipMutation.mutate({ sourceId, targetId, relationshipId })} onSortOrder={(sourceId, targetId, sortOrder) => relationshipMutation.mutate({ sourceId, targetId, sortOrder })} pending={relationshipMutation.isPending} />}
+            {selectedProduct && selectedProduct.inventory_policy !== "tracked" && <RelationshipSelector product={{ ...selectedProduct, activity_addon_enabled: draft.activityAddonEnabled }} products={products} relationships={relationships} onToggle={(sourceId, targetId, relationshipId) => relationshipMutation.mutate({ sourceId, targetId, relationshipId })} onSortOrder={(sourceId, targetId, sortOrder) => relationshipMutation.mutate({ sourceId, targetId, sortOrder })} pending={relationshipMutation.isPending} />}
+
+            {selectedProduct?.inventory_policy === "tracked" ? <AdminTrackedMerch venueId={venueId} productId={selectedProduct.id} /> : null}
 
             {selectedProduct && <section className="border-t border-border px-4 py-5">{draft.status === "archived" ? <button type="button" onClick={() => setDraft((current) => ({ ...current, status: "active" }))} className="flex items-center gap-2 text-sm font-semibold text-primary"><RotateCcw className="h-4 w-4" /> Återställ som aktiv</button> : <button type="button" onClick={() => setDraft((current) => ({ ...current, status: "archived" }))} className="flex items-center gap-2 text-sm font-semibold text-destructive"><Archive className="h-4 w-4" /> Arkivera produkt</button>}</section>}
           </div>

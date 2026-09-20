@@ -62,3 +62,9 @@ verify_jwt = false
 
 [functions.api-stripe-webhook]
 verify_jwt = false
+
+[functions.api-commerce]
+verify_jwt = false
+
+[functions.api-commerce-recovery]
+verify_jwt = false

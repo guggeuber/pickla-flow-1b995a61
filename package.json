@@ -17,6 +17,8 @@
     "verify:pwa-build": "node scripts/verify-pwa-build.mjs",
     "verify:public-web-build": "node scripts/verify-public-web-build.mjs",
     "test": "vitest run",
+    "test:commerce-r2a": "vitest run src/test/commerceR2A.test.ts src/test/commerceR2AEdgeContracts.test.ts",
+    "test:commerce-r2a:db": "bash scripts/test-commerce-r2a-db.sh",
     "test:watch": "vitest"
   },
   "dependencies": {

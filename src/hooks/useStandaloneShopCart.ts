@@ -6,6 +6,7 @@ import {
   clearStandaloneCartIdentity,
   commerceCartQuantitiesFromLines,
   commerceCartItemsFromLines,
+  commerceCartItemFromKey,
   commerceJourneyId,
   createCommerceCart,
   fetchCommerceOrder,
@@ -154,10 +155,8 @@ export function useStandaloneShopCart(venueId?: string | null) {
         return withResolvedLines(fetched, reference, userId);
       };
       const apply = async (quantitiesToApply: Record<string, number>, expectedVersion: number) => {
-        const items: CommerceCartItemInput[] = Object.entries(quantitiesToApply).map(([productId, quantity]) => ({
-          product_id: productId,
-          quantity,
-        }));
+        const items: CommerceCartItemInput[] = Object.entries(quantitiesToApply)
+          .map(([key, quantity]) => commerceCartItemFromKey(key, quantity));
         const updated = await updateCommerceCart({ reference, expectedVersion, items }, authOptions(userId));
         const resolved = items.length > 0
           ? await resolveStandaloneCart(reference, userId)

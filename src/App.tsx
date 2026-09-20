@@ -90,6 +90,7 @@ import { enforceCanonicalHost } from "@/lib/canonicalOrigin";
 import { shouldRetryQuery } from "@/lib/queryRetry";
 import { notifyFrontendRouteChange } from "@/lib/frontendVersionCoordinator";
 import { syncPwaSurfaceMetadata } from "@/lib/pwaSurface";
+import { StageEnvironmentMarker } from "@/components/StageEnvironmentMarker";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -247,6 +248,7 @@ const App = () => (
       <BrowserRouter>
         <CanonicalHostGuard />
         <FrontendVersionRouteGuard />
+        <StageEnvironmentMarker />
         <AuthProvider>
           <AuthenticatedAppBootstrap>
             <AppRoutes />

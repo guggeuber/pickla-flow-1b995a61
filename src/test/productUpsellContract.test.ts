@@ -110,7 +110,7 @@ describe("Product Upsell contract", () => {
     const relationshipDelete = adminSource.slice(deleteStart, adminSource.indexOf("// ── ACTIVITY PROGRAM / SCHEDULE", deleteStart));
 
     expect(relationshipWrite).not.toContain("image_urls");
-    expect(relationshipWrite).toContain(".select('id, commerce_kind').eq('venue_id', venueId)");
+    expect(relationshipWrite).toContain(".select('id, commerce_kind, inventory_policy').eq('venue_id', venueId)");
     expect(relationshipWrite).toContain("Products must belong to the selected venue");
     expect(relationshipWrite).toContain("commerce_kind !== 'participation'");
     expect(relationshipWrite).toContain("is_active: body.is_active !== false");
@@ -129,7 +129,8 @@ describe("Product Upsell contract", () => {
     expect(activityPage).toContain("src={product.image_url}");
     expect(activityPage).toContain("parent_product_id: selectedProduct.id");
     expect(commerceApi).toContain("item.parentLineId = parent.id");
-    expect(commerceApi).toContain("let unitPriceMinor = Math.round(Number(product.base_price_sek || 0) * 100)");
+    expect(commerceApi).toContain("let unitPriceMinor = tracked && variant.price_override_minor !== null");
+    expect(commerceApi).toContain(": Math.round(Number(product.base_price_sek || 0) * 100)");
     expect(commerceApi).toContain("Product relationship changed — review the cart again");
   });
 });

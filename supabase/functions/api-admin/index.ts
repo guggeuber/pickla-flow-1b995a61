@@ -84,6 +84,9 @@ function adminEntityTableForPath(path: string) {
     hours: 'opening_hours',
     pricing: 'pricing_rules',
     products: 'access_products',
+    'tracked-product-setup': 'product_venue_listings',
+    'product-variants': 'product_variants',
+    'tracked-sales': 'product_venue_listings',
     'product-relationships': 'product_relationships',
     'activity-series': 'activity_series',
     'activity-sessions': 'activity_sessions',
@@ -111,6 +114,9 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'hours') return body.dayOfWeek || body.day_of_week || null;
   if (path === 'pricing') return body.ruleId || url.searchParams.get('ruleId');
   if (path === 'products') return body.productId || body.product_key || url.searchParams.get('productId');
+  if (path === 'tracked-product-setup') return body.product_id || null;
+  if (path === 'product-variants') return body.variant_id || body.product_id || url.searchParams.get('productId');
+  if (path === 'tracked-sales') return body.product_id || null;
   if (path === 'product-relationships') return body.relationshipId || `${body.source_product_id || ''}:${body.target_product_id || ''}`;
   if (path === 'activity-series') return body.seriesId || url.searchParams.get('seriesId');
   if (path === 'activity-sessions') return body.sessionId || url.searchParams.get('sessionId');
@@ -6367,7 +6373,7 @@ Deno.serve(async (req) => {
         venueId: _v, product_key, name, description, session_type,
         base_price_sek, vat_rate, grants, sort_order, status,
         standalone_enabled, activity_addon_enabled, fulfillment_presentation,
-        category, sport, image_url,
+        category, sport, image_url, commerce_kind, inventory_policy,
       } = await req.json();
       if (!product_key || !name) return errorResponse('Missing product_key or name');
       if (status !== undefined && !['draft', 'active', 'archived'].includes(status)) return errorResponse('Invalid product status');
@@ -6377,7 +6383,16 @@ Deno.serve(async (req) => {
         activity_addon_enabled,
         fulfillment_presentation,
         category,
+        commerce_kind,
       });
+      const tracked = inventory_policy === 'tracked';
+      if (tracked && commerce_kind !== 'merchandise') return errorResponse('Tracked products must be explicit merchandise', 400);
+      const { data: productVenue, error: productVenueError } = tracked
+        ? await admin.from('venues').select('organization_id').eq('id', venueId).maybeSingle()
+        : { data: null, error: null };
+      if (productVenueError || (tracked && !productVenue?.organization_id)) {
+        return errorResponse(productVenueError?.message || 'Venue has no catalog organization', 409);
+      }
       const { data, error: e } = await admin.from('access_products').upsert({
         venue_id: venueId,
         product_key,
@@ -6390,6 +6405,16 @@ Deno.serve(async (req) => {
         sort_order: sort_order ?? 0,
         resolver_rules: {},
         ...compatibility,
+        ...(tracked ? {
+          catalog_owner_organization_id: productVenue?.organization_id,
+          inventory_policy: 'tracked',
+          commerce_kind: 'merchandise',
+          product_kind: 'merchandise',
+          fulfillment_type: 'desk_pickup',
+          fulfillment_presentation: 'desk_pickup',
+          standalone_enabled: true,
+          activity_addon_enabled: false,
+        } : { inventory_policy: 'stockless' }),
         category: category || null,
         sport: sport || null,
         image_url: image_url || null,
@@ -6410,7 +6435,7 @@ Deno.serve(async (req) => {
         'name', 'description', 'session_type', 'base_price_sek',
         'vat_rate', 'grants', 'sort_order', 'status',
         'standalone_enabled', 'activity_addon_enabled', 'fulfillment_presentation',
-        'category', 'sport', 'image_url',
+        'category', 'sport', 'image_url', 'commerce_kind', 'inventory_policy',
       ]);
       const safeUpdates = Object.fromEntries(Object.entries(updates).filter(([key]) => allowed.has(key)));
       if (Object.keys(safeUpdates).length === 0) return errorResponse('No supported product fields');
@@ -6425,7 +6450,24 @@ Deno.serve(async (req) => {
       if (managedSeriesError) return errorResponse(managedSeriesError.message);
       if (managedSeries) return errorResponse(MANAGED_SERIES_MESSAGE, 409);
       const merged = { ...existing, ...safeUpdates };
+      if (safeUpdates.inventory_policy === 'tracked' && safeUpdates.commerce_kind !== 'merchandise' && existing.commerce_kind !== 'merchandise') {
+        return errorResponse('Tracked products must be explicit merchandise', 400);
+      }
+      if (existing.inventory_policy === 'tracked' && safeUpdates.activity_addon_enabled === true) {
+        return errorResponse('Tracked merchandise cannot be an activity add-on in R2A', 409);
+      }
       const compatibility = deriveCommerceCompatibilityFields(merged, existing);
+      if (safeUpdates.inventory_policy === 'tracked') {
+        const { data: productVenue, error: productVenueError } = await admin.from('venues')
+          .select('organization_id').eq('id', venueId).maybeSingle();
+        if (productVenueError || !productVenue?.organization_id) return errorResponse(productVenueError?.message || 'Venue has no catalog organization', 409);
+        Object.assign(safeUpdates, { catalog_owner_organization_id: productVenue.organization_id });
+        Object.assign(compatibility, {
+          commerce_kind: 'merchandise', product_kind: 'merchandise',
+          fulfillment_type: 'desk_pickup', fulfillment_presentation: 'desk_pickup',
+          standalone_enabled: true, activity_addon_enabled: false,
+        });
+      }
       const { data, error: e } = await admin.from('access_products')
         .update({ ...safeUpdates, ...compatibility }).eq('id', productId).eq('venue_id', venueId).select().single();
       if (e) return errorResponse(e.message);
@@ -6446,6 +6488,168 @@ Deno.serve(async (req) => {
       const { error: e } = await admin.from('access_products').delete().eq('id', productId).eq('venue_id', venueId);
       if (e) return errorResponse(e.message);
       return jsonResponse({ ok: true });
+    }
+
+    if (req.method === 'GET' && path === 'product-variants') {
+      const productId = String(url.searchParams.get('productId') || '').trim();
+      if (!productId) return errorResponse('Missing productId', 400);
+      const [{ data: product, error: productError }, { data: venueContext, error: venueContextError }] = await Promise.all([
+        admin.from('access_products')
+          .select('id, venue_id, inventory_policy, catalog_owner_organization_id')
+          .eq('id', productId).maybeSingle(),
+        admin.from('venues').select('id, organization_id, franchisee_id, tracked_merch_sales_enabled, franchisees(id, legal_name, org_number, status)')
+          .eq('id', venueId).maybeSingle(),
+      ]);
+      if (productError || venueContextError || !product) return errorResponse(productError?.message || venueContextError?.message || 'Product not found', 404);
+      const { data: listing, error: listingError } = await admin.from('product_venue_listings')
+        .select('*, inventory_locations(*)').eq('product_id', productId).eq('venue_id', venueId).maybeSingle();
+      if (listingError) return errorResponse(listingError.message);
+      if (product.venue_id !== venueId && !listing) return errorResponse('Product is not available to this venue', 403);
+      const [{ data: options, error: optionError }, { data: variants, error: variantError }] = await Promise.all([
+        admin.from('product_options').select('*, product_option_values(*)').eq('product_id', productId).order('sort_order'),
+        admin.from('product_variants').select('*, product_variant_option_values(*)').eq('product_id', productId).order('sku'),
+      ]);
+      if (optionError || variantError) return errorResponse(optionError?.message || variantError?.message);
+      const variantIds = (variants || []).map((variant: any) => variant.id);
+      const locationId = listing?.default_inventory_location_id || null;
+      const { data: levels, error: levelError } = variantIds.length && locationId
+        ? await admin.from('inventory_levels').select('*').in('variant_id', variantIds).eq('location_id', locationId)
+        : { data: [], error: null };
+      if (levelError) return errorResponse(levelError.message);
+      const levelByVariant = new Map((levels || []).map((level: any) => [level.variant_id, level]));
+      return jsonResponse({
+        product,
+        venue: venueContext,
+        listing: listing || null,
+        options: options || [],
+        variants: (variants || []).map((variant: any) => {
+          const level: any = levelByVariant.get(variant.id) || null;
+          return {
+            ...variant,
+            inventory: level ? {
+              ...level,
+              available_to_sell: Number(level.on_hand) - Number(level.reserved) - Number(level.allocated),
+            } : null,
+          };
+        }),
+      }, 200, 0);
+    }
+
+    if (req.method === 'POST' && path === 'tracked-product-setup') {
+      const body = await req.json();
+      const productId = String(body.product_id || '').trim();
+      const sellerId = String(body.seller_franchisee_id || '').trim();
+      if (!productId || !sellerId) return errorResponse('Product and seller are required', 400);
+      const [{ data: product, error: productError }, { data: venue, error: venueError }, { data: seller, error: sellerError }] = await Promise.all([
+        admin.from('access_products').select('*').eq('id', productId).maybeSingle(),
+        admin.from('venues').select('id, organization_id, franchisee_id').eq('id', venueId).maybeSingle(),
+        admin.from('franchisees').select('id, organization_id, status, payout_currency, stripe_account_id').eq('id', sellerId).maybeSingle(),
+      ]);
+      if (productError || venueError || sellerError) return errorResponse(productError?.message || venueError?.message || sellerError?.message);
+      if (!product || product.inventory_policy !== 'tracked' || product.commerce_kind !== 'merchandise') {
+        return errorResponse('Product must be explicit tracked merchandise', 409);
+      }
+      if (!venue || !seller || seller.status !== 'active' || seller.organization_id !== venue.organization_id
+        || product.catalog_owner_organization_id !== venue.organization_id) {
+        return errorResponse('Seller, venue, and catalog owner do not match', 409);
+      }
+      if (venue.franchisee_id && venue.franchisee_id !== sellerId) {
+        return errorResponse('Seller is not the venue legal operator', 409);
+      }
+      let location: any = null;
+      if (body.location_id) {
+        const result = await admin.from('inventory_locations').select('*')
+          .eq('id', body.location_id).eq('venue_id', venueId).eq('inventory_owner_franchisee_id', sellerId).maybeSingle();
+        if (result.error || !result.data) return errorResponse(result.error?.message || 'Inventory location not found', 404);
+        location = result.data;
+      } else {
+        const code = String(body.location_code || 'retail').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+        const { data, error } = await admin.from('inventory_locations').upsert({
+          venue_id: venueId,
+          inventory_owner_franchisee_id: sellerId,
+          code,
+          name: String(body.location_name || 'Butik / reception').trim(),
+          status: 'active',
+          is_default_retail: true,
+        }, { onConflict: 'venue_id,code' }).select().single();
+        if (error) return errorResponse(error.message);
+        location = data;
+      }
+      const definitions = Array.isArray(body.options) ? body.options : [];
+      if (definitions.length > 0 && await (async () => {
+        const { count } = await admin.from('product_variants').select('id', { count: 'exact', head: true }).eq('product_id', productId);
+        return Number(count || 0) > 0;
+      })()) return errorResponse('Archive variants before changing required option definitions', 409);
+      for (let index = 0; index < definitions.length; index += 1) {
+        const definition = definitions[index];
+        const code = String(definition.code || '').trim().toLowerCase();
+        const { data: option, error: optionError } = await admin.from('product_options').upsert({
+          product_id: productId, code, label: String(definition.label || code),
+          is_required: true, sort_order: Number(definition.sort_order ?? index * 10), status: 'active',
+        }, { onConflict: 'product_id,code' }).select().single();
+        if (optionError || !option) return errorResponse(optionError?.message || 'Could not create option');
+        for (let valueIndex = 0; valueIndex < (definition.values || []).length; valueIndex += 1) {
+          const value = definition.values[valueIndex];
+          const { error: valueError } = await admin.from('product_option_values').upsert({
+            option_id: option.id,
+            code: String(value.code || '').trim().toLowerCase(),
+            label: String(value.label || value.code || '').trim(),
+            swatch: value.swatch || null,
+            sort_order: Number(value.sort_order ?? valueIndex * 10),
+            status: 'active',
+          }, { onConflict: 'option_id,code' });
+          if (valueError) return errorResponse(valueError.message);
+        }
+      }
+      const { data: listing, error: listingError } = await admin.from('product_venue_listings').upsert({
+        product_id: productId,
+        venue_id: venueId,
+        seller_franchisee_id: sellerId,
+        default_inventory_location_id: location.id,
+        currency: 'SEK',
+        status: 'active',
+        tracked_sales_enabled: body.tracked_sales_enabled === true,
+      }, { onConflict: 'product_id,venue_id' }).select().single();
+      if (listingError) return errorResponse(listingError.message);
+      return jsonResponse({ location, listing }, 201, 0);
+    }
+
+    if ((req.method === 'POST' || req.method === 'PATCH') && path === 'product-variants') {
+      const body = await req.json();
+      const productId = String(body.product_id || '').trim();
+      const { data: product, error: productError } = await admin.from('access_products')
+        .select('id, venue_id').eq('id', productId).maybeSingle();
+      if (productError || !product || product.venue_id !== venueId) return errorResponse(productError?.message || 'Product not found', 404);
+      const { data, error } = await admin.rpc('commerce_r2a_upsert_variant', {
+        p_product_id: productId,
+        p_variant_id: body.variant_id || null,
+        p_sku: String(body.sku || ''),
+        p_title: String(body.title || ''),
+        p_price_override_minor: body.price_override_minor == null || body.price_override_minor === ''
+          ? null : Math.floor(Number(body.price_override_minor)),
+        p_image_url: String(body.image_url || ''),
+        p_status: body.status === 'archived' ? 'archived' : 'active',
+        p_option_value_ids: Array.isArray(body.option_value_ids) ? body.option_value_ids : [],
+        p_actor_user_id: userId,
+      });
+      if (error) return errorResponse(error.message, error.code === '23505' ? 409 : 400);
+      return jsonResponse(data, req.method === 'POST' ? 201 : 200, 0);
+    }
+
+    if (req.method === 'PATCH' && path === 'tracked-sales') {
+      const body = await req.json();
+      const productId = String(body.product_id || '').trim();
+      const enabled = body.enabled === true;
+      const { data: listing, error: listingError } = await admin.from('product_venue_listings')
+        .update({ tracked_sales_enabled: enabled })
+        .eq('product_id', productId).eq('venue_id', venueId).select().maybeSingle();
+      if (listingError || !listing) return errorResponse(listingError?.message || 'Listing not found', 404);
+      if (enabled) {
+        const { error: venueFlagError } = await admin.from('venues')
+          .update({ tracked_merch_sales_enabled: true }).eq('id', venueId);
+        if (venueFlagError) return errorResponse(venueFlagError.message);
+      }
+      return jsonResponse(listing, 200, 0);
     }
 
     if (req.method === 'GET' && path === 'product-relationships') {
@@ -6473,7 +6677,7 @@ Deno.serve(async (req) => {
       const sortOrder = Number(body.sort_order ?? 0);
       if (!Number.isSafeInteger(sortOrder)) return errorResponse('Invalid relationship sort order', 400);
       const { data: ownedProducts, error: ownedError } = await admin.from('access_products')
-        .select('id, commerce_kind').eq('venue_id', venueId).in('id', [sourceProductId, targetProductId]);
+        .select('id, commerce_kind, inventory_policy').eq('venue_id', venueId).in('id', [sourceProductId, targetProductId]);
       if (ownedError) return errorResponse(ownedError.message);
       if ((ownedProducts || []).length !== 2) return errorResponse('Products must belong to the selected venue', 403);
       const productsById = new Map((ownedProducts || []).map((product: { id: string; commerce_kind: string | null }) => [product.id, product]));
@@ -6482,6 +6686,9 @@ Deno.serve(async (req) => {
       }
       if (!['rental', 'merchandise'].includes(String(productsById.get(targetProductId)?.commerce_kind || ''))) {
         return errorResponse('Target product must be eligible for Commerce add-ons', 400);
+      }
+      if ((productsById.get(targetProductId) as any)?.inventory_policy === 'tracked') {
+        return errorResponse('Tracked merchandise cannot be an activity add-on in R2A', 409);
       }
       const { data, error: e } = await admin.from('product_relationships').upsert({
         venue_id: venueId,

@@ -10,6 +10,7 @@ export type CommerceProductLike = {
   fulfillment_presentation?: string | null;
   base_price_sek?: number | string | null;
   vat_rate?: number | string | null;
+  inventory_policy?: string | null;
 };
 
 export type CommerceAvailabilityOptions = {
@@ -31,7 +32,8 @@ export type CommerceAvailability = {
     | 'invalid_price'
     | 'invalid_vat'
     | 'invalid_classification'
-    | 'invalid_fulfillment';
+    | 'invalid_fulfillment'
+    | 'unsupported_tracked_channel';
   message: string | null;
 };
 
@@ -85,6 +87,10 @@ export function evaluateCommerceAvailability(
     return { eligible: true, code: 'available', message: null };
   }
 
+  if (product.inventory_policy === 'tracked') {
+    return unavailable('unsupported_tracked_channel', 'Lagerspårade varor säljs endast fristående i R2A.');
+  }
+
   if (product.activity_addon_enabled !== true) {
     return unavailable('channel_disabled', 'Produkten är inte aktiverad som aktivitetstillval.');
   }
@@ -106,11 +112,14 @@ export function deriveCommerceCompatibilityFields(
   );
   const category = String(input.category ?? existing?.category ?? '').trim();
   const participation = fulfillmentPresentation === 'participation' || existing?.commerce_kind === 'participation';
-  const rental = !participation && (
+  const explicitKind = ['rental', 'merchandise'].includes(String(input.commerce_kind || ''))
+    ? String(input.commerce_kind)
+    : null;
+  const rental = !participation && (explicitKind === 'rental' || (!explicitKind && (
     /^(hyra|uthyrning|rental)$/i.test(category)
     || (existing?.commerce_kind === 'rental' && !category)
-  );
-  const commerceKind = participation ? 'participation' : rental ? 'rental' : 'merchandise';
+  )));
+  const commerceKind = participation ? 'participation' : explicitKind || (rental ? 'rental' : 'merchandise');
   const fulfillmentType = fulfillmentPresentation === 'desk_pickup'
     ? 'desk_pickup'
     : fulfillmentPresentation === 'participation'

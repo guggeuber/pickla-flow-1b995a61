@@ -194,7 +194,7 @@ describe("program purchase session recovery", () => {
   it("can only retry auth rejection before commerce mutation begins", () => {
     const requestAuth = commerceApiSource.indexOf("const { userId } = await optionalUser(req)");
     const cartInsert = commerceApiSource.indexOf(".from('commerce_orders').insert({");
-    const stripeCreate = commerceApiSource.indexOf("stripeSession = await createStripeCheckoutSession");
+    const stripeCreate = commerceApiSource.indexOf("await createStripeCheckoutSession");
 
     expect(requestAuth).toBeGreaterThan(-1);
     expect(cartInsert).toBeGreaterThan(requestAuth);

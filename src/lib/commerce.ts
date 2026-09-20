@@ -25,6 +25,38 @@ export interface CommerceProduct {
   store_eligible?: boolean;
   resolver_rules?: Record<string, unknown> | null;
   max_quantity?: number;
+  inventory_policy?: "stockless" | "tracked";
+  catalog_owner_organization_id?: string | null;
+  variants?: CommerceVariant[];
+  listing?: {
+    id: string;
+    pickup_location_id: string;
+    pickup_location_name: string | null;
+    currency: string;
+  } | null;
+}
+
+export interface CommerceVariantOption {
+  option_id: string;
+  option_code: string;
+  option_label: string;
+  value_id: string;
+  value_code: string;
+  value_label: string;
+  swatch: string | null;
+}
+
+export interface CommerceVariant {
+  id: string;
+  product_id: string;
+  sku: string;
+  title: string | null;
+  price_override_minor: number | null;
+  image_url: string | null;
+  status: "active" | "archived";
+  options: CommerceVariantOption[];
+  available_to_sell: number;
+  sold_out: boolean;
 }
 
 export function commerceProductMaxQuantity(product: Pick<CommerceProduct, "max_quantity" | "resolver_rules">) {
@@ -76,6 +108,8 @@ export interface CommerceCartItemInput {
   activity_session_id?: string;
   session_date?: string;
   parent_product_id?: string;
+  variant_id?: string;
+  pickup_location_id?: string;
 }
 
 export interface CommerceOrderLine {
@@ -103,6 +137,13 @@ export interface CommerceOrderLine {
   dependent_participant_id?: string | null;
   product_snapshot?: Record<string, unknown> | null;
   resolver_snapshot?: Record<string, unknown> | null;
+  inventory_policy?: "stockless" | "tracked";
+  variant_id?: string | null;
+  sku?: string | null;
+  pickup_location_id?: string | null;
+  variant_snapshot?: ({ title?: string | null; options?: CommerceVariantOption[] } & Record<string, unknown>) | null;
+  collected_quantity?: number;
+  cancelled_quantity?: number;
 }
 
 export interface CommerceOrderResponse {
@@ -191,6 +232,10 @@ export interface DeskFulfillmentItem {
   fulfilled_at: string | null;
   pickup_instruction: string;
   pickup_eligible: boolean;
+  sku?: string | null;
+  variant_label?: string | null;
+  collected_quantity: number;
+  remaining_quantity: number;
 }
 
 export interface DeskFulfillmentResponse {
@@ -209,8 +254,12 @@ export function commercePendingPickupItems(
     && (!options.confirmed || line.fulfillment_status === "pending_pickup")
   )).map((line) => ({
     lineId: line.id,
-    productName: line.product_name,
-    quantity: Math.max(0, Number(line.quantity || 0)),
+    productName: [
+      line.product_name,
+      line.variant_snapshot?.options?.map((option) => option.value_label).join(" / "),
+      line.sku ? `SKU ${line.sku}` : "",
+    ].filter(Boolean).join(" · "),
+    quantity: Math.max(0, Number(line.quantity || 0) - Number(line.collected_quantity || 0) - Number(line.cancelled_quantity || 0)),
   }));
 }
 
@@ -278,6 +327,8 @@ export function commerceCartItemsFromLines(lines: CommerceOrderLine[]): Commerce
     quantity: Number(line.quantity || 0),
     ...(line.activity_session_id ? { activity_session_id: line.activity_session_id } : {}),
     ...(line.session_date ? { session_date: line.session_date } : {}),
+    ...(line.variant_id ? { variant_id: line.variant_id } : {}),
+    ...(line.pickup_location_id ? { pickup_location_id: line.pickup_location_id } : {}),
   })).filter((item) => item.product_id && item.quantity > 0);
 }
 
@@ -306,9 +357,28 @@ export function notifyStandaloneCartUpdated(venueId: string, options: { broadcas
 
 export function commerceCartQuantitiesFromLines(lines: CommerceOrderLine[]) {
   return Object.fromEntries(lines.map((line) => [
-    String(line.product_id || ""),
+    commerceCartItemKey({
+      product_id: String(line.product_id || ""),
+      variant_id: line.variant_id || undefined,
+      pickup_location_id: line.pickup_location_id || undefined,
+    }),
     Math.max(0, Number(line.quantity || 0)),
   ]).filter(([productId]) => Boolean(productId)));
+}
+
+export function commerceCartItemKey(item: Pick<CommerceCartItemInput, "product_id" | "variant_id" | "pickup_location_id">) {
+  return item.variant_id && item.pickup_location_id
+    ? `${item.product_id}::${item.variant_id}::${item.pickup_location_id}`
+    : item.product_id;
+}
+
+export function commerceCartItemFromKey(key: string, quantity: number): CommerceCartItemInput {
+  const [productId, variantId, pickupLocationId] = key.split("::");
+  return {
+    product_id: productId,
+    quantity,
+    ...(variantId && pickupLocationId ? { variant_id: variantId, pickup_location_id: pickupLocationId } : {}),
+  };
 }
 
 export function rebaseCommerceCartQuantities(

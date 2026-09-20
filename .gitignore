@@ -25,3 +25,5 @@ api/_release-identity.generated.json
 *.sw?
 .env
 .env.local
+.vercel
+.env*

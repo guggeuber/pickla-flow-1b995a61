@@ -110,7 +110,7 @@ describe("Commerce R1B Desk fulfillment contract", () => {
     expect(loader).toContain(".eq('commerce_orders.venue_id', venueId)");
     expect(loader).toContain(".in('commerce_orders.status', ['paid', 'attention'])");
     expect(loader).toContain(".eq('fulfillment_type', 'desk_pickup')");
-    expect(loader).toContain(".eq('session_date', filter.serviceDate)");
+    expect(loader).toContain(".or(`session_date.eq.${filter.serviceDate},session_date.is.null`)");
     expect(loader).not.toContain(".from('commerce_orders')");
     expect(loader).not.toContain(".in('commerce_order_id'");
     expect(loader).not.toContain("orderIds");

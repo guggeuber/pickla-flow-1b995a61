@@ -33,6 +33,8 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/commerce", () => ({
   COMMERCE_PICKUP_COPY: "Hämtas vid disken.",
+  commerceCartItemKey: (item: { product_id: string; variant_id?: string | null }) =>
+    `${item.product_id}:${item.variant_id || "base"}`,
   commerceJourneyId: () => "test-commerce-journey-id",
   commerceRacketPickupQuantity: (lines: Array<Record<string, unknown>>) => lines.reduce((sum, line) => (
     line.product_name === "Hyrrack" ? sum + Number(line.quantity || 0) : sum

@@ -263,11 +263,11 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
     onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
   });
   const collectMutation = useMutation({
-    mutationFn: (line: DeskFulfillmentItem) => apiPatch("api-commerce", "fulfillment", { venue_id: venueId, line_id: line.line_id, status: "collected" }),
-    onSuccess: (_result, line) => {
-      toast.success("Uthämtningen är klar");
+    mutationFn: (line: DeskFulfillmentItem) => apiPatch<{ item: DeskFulfillmentItem }>("api-commerce", "fulfillment", { venue_id: venueId, line_id: line.line_id, status: "collected", quantity: 1, idempotency_key: crypto.randomUUID() }),
+    onSuccess: (result, line) => {
+      toast.success(result.item.remaining_quantity > 0 ? "En vara utlämnad · fler återstår" : "Uthämtningen är klar");
       qc.setQueryData<DeskFulfillmentResponse>(["commerce-fulfillment", venueId, "pending_pickup", today], (current) => current
-        ? { ...current, items: current.items.filter((item) => item.line_id !== line.line_id) }
+        ? { ...current, items: current.items.flatMap((item) => item.line_id !== line.line_id ? [item] : result.item.remaining_quantity > 0 ? [result.item] : []) }
         : current);
       qc.invalidateQueries({ queryKey: ["commerce-fulfillment", venueId] });
       qc.invalidateQueries({ queryKey: ["commerce-my-orders"] });
@@ -477,12 +477,14 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
                 const collecting = collectMutation.isPending && collectMutation.variables?.line_id === line.line_id;
                 return (
                   <AxCard key={line.line_id} className="flex items-center gap-3 p-3">
-                    <button type="button" role="checkbox" aria-checked={collected} aria-label={`Markera ${line.product_name} som utlämnad`} onClick={() => !collected && collectMutation.mutate(line)} disabled={collected || collecting} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border disabled:opacity-100" style={{ borderColor: collected ? ax("lime") : ax("borderSoft"), color: collected ? ax("lime") : ax("muted") }}>
+                    <button type="button" role="checkbox" aria-checked={collected} aria-label={`Markera ${line.product_name} som utlämnad`} onClick={() => !collected && line.pickup_eligible && collectMutation.mutate(line)} disabled={collected || collecting || !line.pickup_eligible} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border disabled:opacity-100" style={{ borderColor: collected ? ax("lime") : ax("borderSoft"), color: collected ? ax("lime") : ax("muted") }}>
                       {collecting ? <Loader2 className="h-5 w-5 animate-spin" /> : collected ? <Check className="h-5 w-5" /> : <Square className="h-5 w-5" />}
                     </button>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-black text-white">{line.customer_name || "Kund"}</p>
-                      <p className="truncate text-xs font-bold" style={{ color: ax("electricSoft") }}>{line.product_name}{line.quantity > 1 ? ` · ${line.quantity} st` : ""}</p>
+                      <p className="truncate text-xs font-bold" style={{ color: ax("electricSoft") }}>{line.product_name}{line.variant_label ? ` · ${line.variant_label}` : ""}{line.sku ? ` · ${line.sku}` : ""}</p>
+                      {!collected && line.pickup_eligible && line.remaining_quantity > 0 ? <p className="truncate text-[11px]" style={{ color: ax("lime") }}>{line.remaining_quantity} kvar att lämna ut · knappen lämnar ut 1</p> : null}
+                      {!collected && !line.pickup_eligible ? <p className="truncate text-[11px]" style={{ color: ax("danger") }}>Blockerad · hantera lagerincidenten innan utlämning</p> : null}
                       <p className="truncate text-[11px]" style={{ color: ax("muted") }}>{line.activity_title || `Order ${line.order_reference}`} · {line.order_status === "paid" ? "Betald" : "Bekräftad"} · {collected ? "Utlämnad" : "Ej utlämnad"}</p>
                     </div>
                   </AxCard>

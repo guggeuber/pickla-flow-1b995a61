@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { Loader2, Minus, Plus, ShoppingBag } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,6 +8,7 @@ import { useStandaloneShopCart } from "@/hooks/useStandaloneShopCart";
 import { apiGet } from "@/lib/api";
 import {
   COMMERCE_PICKUP_COPY,
+  commerceCartItemKey,
   commerceProductMaxQuantity,
   fetchCommerceCatalog,
   formatCommerceMoney,
@@ -32,11 +34,12 @@ export default function CommerceShopPage() {
   });
   const cart = useStandaloneShopCart(venueId);
   const products = (catalog.data?.products || []).filter((product) => product.store_eligible === true);
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
 
-  const change = (productId: string, delta: number, maximum: number) => {
+  const change = (cartKey: string, delta: number, maximum: number) => {
     const next = {
       ...cart.quantities,
-      [productId]: Math.max(0, Math.min(maximum, Number(cart.quantities[productId] || 0) + delta)),
+      [cartKey]: Math.max(0, Math.min(maximum, Number(cart.quantities[cartKey] || 0) + delta)),
     };
     void cart.queueQuantities(next).catch((error: Error) => toast.error(error.message));
   };
@@ -54,20 +57,49 @@ export default function CommerceShopPage() {
         ) : (
           <div className="divide-y divide-black/10 border-y border-black/10">
             {products.map((product) => {
-              const quantity = Number(cart.quantities[product.id] || 0);
-              const maximum = commerceProductMaxQuantity(product);
+              const tracked = product.inventory_policy === "tracked";
+              const variants = product.variants || [];
+              const selectedVariant = tracked
+                ? variants.find((variant) => variant.id === selectedVariants[product.id]) || variants.find((variant) => !variant.sold_out) || variants[0]
+                : null;
+              const cartKey = commerceCartItemKey({
+                product_id: product.id,
+                variant_id: selectedVariant?.id,
+                pickup_location_id: tracked ? product.listing?.pickup_location_id : undefined,
+              });
+              const quantity = Number(cart.quantities[cartKey] || 0);
+              const maximum = tracked
+                ? Math.max(0, Math.min(commerceProductMaxQuantity(product), Number(selectedVariant?.available_to_sell || 0)))
+                : commerceProductMaxQuantity(product);
+              const displayPriceMinor = selectedVariant?.price_override_minor ?? product.base_price_sek * 100;
               return (
                 <article key={product.id} className="flex items-center gap-4 py-5">
-                  {product.image_url ? <img src={product.image_url} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" /> : <span className="grid h-16 w-16 shrink-0 place-items-center bg-slate-100"><ShoppingBag className="h-5 w-5" /></span>}
+                  {selectedVariant?.image_url || product.image_url ? <img src={selectedVariant?.image_url || product.image_url || ""} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" /> : <span className="grid h-16 w-16 shrink-0 place-items-center bg-slate-100"><ShoppingBag className="h-5 w-5" /></span>}
                   <div className="min-w-0 flex-1">
                     <h2 className="font-black">{product.name}</h2>
                     <p className="mt-1 text-xs text-slate-500">{product.description || (product.fulfillment_presentation === "desk_pickup" ? COMMERCE_PICKUP_COPY : product.fulfillment_presentation === "digital" ? "Levereras digitalt." : "Tillgång hos Pickla.")}</p>
-                    <p className="mt-2 font-bold">{formatCommerceMoney(product.base_price_sek * 100)}</p>
+                    {tracked ? (
+                      <select
+                        aria-label={`Variant ${product.name}`}
+                        value={selectedVariant?.id || ""}
+                        onChange={(event) => setSelectedVariants((current) => ({ ...current, [product.id]: event.target.value }))}
+                        className="mt-2 w-full rounded-lg border border-black/15 bg-white px-2 py-2 text-sm font-semibold"
+                      >
+                        {variants.map((variant) => (
+                          <option key={variant.id} value={variant.id} disabled={variant.sold_out}>
+                            {variant.options.map((option) => option.value_label).join(" / ") || variant.title || variant.sku}
+                            {variant.sold_out ? " · Slutsåld" : ` · ${variant.available_to_sell} kvar`}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <p className="mt-2 font-bold">{formatCommerceMoney(displayPriceMinor)}</p>
+                    {tracked ? <p className="mt-1 text-[11px] text-slate-500">Hämtas: {product.listing?.pickup_location_name || "Pickla"} · SKU {selectedVariant?.sku || "–"}</p> : null}
                   </div>
                   <div className="flex items-center gap-2" aria-label={`Antal ${product.name}`}>
-                    <button type="button" onClick={() => change(product.id, -1, maximum)} disabled={quantity === 0} className="grid h-10 w-10 place-items-center rounded-full border border-black/15 disabled:text-slate-300" aria-label={`Minska ${product.name}`}><Minus className="h-4 w-4" /></button>
+                    <button type="button" onClick={() => change(cartKey, -1, maximum)} disabled={quantity === 0} className="grid h-10 w-10 place-items-center rounded-full border border-black/15 disabled:text-slate-300" aria-label={`Minska ${product.name}`}><Minus className="h-4 w-4" /></button>
                     <span className="w-5 text-center font-black" aria-live="polite">{quantity}</span>
-                    <button type="button" onClick={() => change(product.id, 1, maximum)} disabled={quantity >= maximum} className="grid h-10 w-10 place-items-center rounded-full bg-slate-950 text-white disabled:bg-slate-300" aria-label={`Öka ${product.name}`}><Plus className="h-4 w-4" /></button>
+                    <button type="button" onClick={() => change(cartKey, 1, maximum)} disabled={!selectedVariant && tracked || quantity >= maximum} className="grid h-10 w-10 place-items-center rounded-full bg-slate-950 text-white disabled:bg-slate-300" aria-label={`Öka ${product.name}`}><Plus className="h-4 w-4" /></button>
                   </div>
                 </article>
               );

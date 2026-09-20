@@ -80,7 +80,7 @@ describe("pay first contracts", () => {
   });
 
   it("releases expired participant checkout holds", () => {
-    expect(webhook).toContain("finalizeExpiredCommerceCheckout(event.data.object, serviceClient)");
+    expect(webhook).toContain("finalizeExpiredCommerceCheckout(expiredSession, serviceClient)");
     expect(checkoutExpiry).toContain("const directHoldId = String(session?.metadata?.capacity_hold_id");
     expect(checkoutExpiry).toContain("p_reason: 'stripe_checkout_expired'");
   });

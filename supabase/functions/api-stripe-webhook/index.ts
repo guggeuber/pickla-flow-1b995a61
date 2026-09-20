@@ -4,7 +4,7 @@
 // Configure the webhook endpoint in the Stripe dashboard:
 //   https://<project>.supabase.co/functions/v1/api-stripe-webhook
 // Events to listen for: checkout.session.completed, checkout.session.expired,
-// charge.refunded, refund.updated, invoice.paid
+// charge.refunded, charge.refund.updated, refund.updated, refund.failed, invoice.paid
 
 import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getServiceClient } from '../_shared/auth.ts';
@@ -17,6 +17,8 @@ import {
 } from './commerce_participation.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 import { canonicalEntitlementFields } from '../_shared/entitlements.ts';
+import { assertStripeEventMode } from '../_shared/stripe_environment_contract.ts';
+import { requireStripeRuntimeEnvironment } from '../_shared/stripe_environment.ts';
 import { finalizeExpiredCommerceCheckout } from '../_shared/commerce_checkout_expiry.ts';
 import { finalizePaidBookingParticipantCheckout } from '../_shared/booking_participant_payment.ts';
 import { resolveBookingGroupCapacity } from '../_shared/booking_participant_state.ts';
@@ -40,6 +42,9 @@ type StripeRefundObject = {
   payment_intent?: string | { id?: string | null } | null;
   amount?: number | null;
   amount_refunded?: number | null;
+  failure_reason?: string | null;
+  metadata?: Record<string, string> | null;
+  refunds?: { data?: StripeRefundObject[] } | null;
 };
 
 // Deno-native Stripe webhook signature verification.
@@ -109,6 +114,13 @@ const stripeWebhookHandler = async (req: Request) => {
   if (!stripeKey || !webhookSecret) {
     return errorResponse('Stripe not configured', 500);
   }
+  let stripeRuntime;
+  try {
+    stripeRuntime = requireStripeRuntimeEnvironment(stripeKey);
+  } catch (error) {
+    console.error('Stripe environment guard rejected webhook request:', error instanceof Error ? error.message : 'unknown error');
+    return errorResponse('Stripe environment configuration rejected', 503);
+  }
 
   // Verify Stripe signature — security gate
   const signature = req.headers.get('stripe-signature');
@@ -120,6 +132,7 @@ const stripeWebhookHandler = async (req: Request) => {
   try {
     await verifyStripeSignature(rawBody, signature, webhookSecret);
     event = JSON.parse(rawBody);
+    assertStripeEventMode(stripeRuntime, event?.livemode);
   } catch (err) {
     console.error('Webhook signature verification failed:', err);
     return errorResponse(`Webhook signature error: ${(err as Error).message}`, 400);
@@ -190,7 +203,22 @@ const stripeWebhookHandler = async (req: Request) => {
 
   if (event.type === 'checkout.session.expired') {
     try {
-      await finalizeExpiredCommerceCheckout(event.data.object, serviceClient);
+      const expiredSession = event.data.object;
+      const trackedAttemptId = String(expiredSession?.metadata?.commerce_checkout_attempt_id || '').trim();
+      if (trackedAttemptId) {
+        if (expiredSession.status !== 'expired' || expiredSession.payment_status === 'paid') {
+          throw new Error('Tracked checkout expiry event is not authoritative unpaid closure');
+        }
+        const { error: closeError } = await serviceClient.rpc('commerce_r2a_close_unpaid_attempt', {
+          p_attempt_id: trackedAttemptId,
+          p_provider_session_id: expiredSession.id,
+          p_provider_status: 'expired',
+          p_reason: 'stripe_checkout_session_expired',
+        });
+        if (closeError) throw new Error(closeError.message);
+      } else {
+        await finalizeExpiredCommerceCheckout(expiredSession, serviceClient);
+      }
       await serviceClient.from('stripe_events')
         .update({ status: 'processed', processed_at: new Date().toISOString(), error: null })
         .eq('id', eventId);
@@ -204,9 +232,9 @@ const stripeWebhookHandler = async (req: Request) => {
     }
   }
 
-  if (event.type === 'charge.refunded' || event.type === 'refund.updated') {
+  if (['charge.refunded', 'charge.refund.updated', 'refund.updated', 'refund.failed'].includes(event.type)) {
     try {
-      await handleCommerceRefund(event.data.object, event.type, serviceClient);
+      await handleCommerceRefund(event.data.object, event.type, serviceClient, event);
       await serviceClient.from('stripe_events')
         .update({ status: 'processed', processed_at: new Date().toISOString(), error: null })
         .eq('id', eventId);
@@ -242,7 +270,7 @@ const stripeWebhookHandler = async (req: Request) => {
 
   try {
     if (commerceOrderId) {
-      await handleCommerceOrder(session, meta, serviceClient);
+      await handleCommerceOrder(session, meta, serviceClient, event);
     } else if (product_type === 'court_booking') {
       await handleCourtBooking(session, meta, serviceClient);
     } else if (product_type === 'day_pass') {
@@ -348,10 +376,17 @@ async function handleCommerceOrder(
   session: any,
   meta: Record<string, string>,
   serviceClient: any,
+  event: any,
 ) {
   const orderId = String(meta.commerce_order_id || '').trim();
   const orderVersion = Number(meta.commerce_order_version || 0);
   if (!orderId || !orderVersion) throw new Error('Missing commerce order metadata');
+  if (session?.payment_status !== 'paid') {
+    throw new Error('Commerce Checkout Session is not paid');
+  }
+  if (!stripeId(session?.payment_intent)) {
+    throw new Error('Paid Commerce Checkout Session has no PaymentIntent');
+  }
 
   const { data: order, error: orderError } = await serviceClient
     .from('commerce_orders')
@@ -360,7 +395,26 @@ async function handleCommerceOrder(
     .maybeSingle();
   if (orderError || !order) throw new Error(orderError?.message || 'Commerce order not found');
   if (Number(order.version) !== orderVersion) throw new Error('Commerce order version mismatch');
-  if (order.stripe_session_id !== session.id) throw new Error('Commerce order Stripe session mismatch');
+  if (order.checkout_attempt_id) {
+    const trackedAttemptId = String(meta.commerce_checkout_attempt_id || '').trim();
+    if (!trackedAttemptId || trackedAttemptId !== order.checkout_attempt_id) {
+      throw new Error('Commerce checkout attempt mismatch');
+    }
+    const { data: attempt, error: attemptError } = await serviceClient.from('commerce_checkout_attempts')
+      .select('id, provider_environment, provider_account_key, provider_session_id, status')
+      .eq('id', trackedAttemptId).eq('commerce_order_id', order.id).maybeSingle();
+    if (attemptError || !attempt) throw new Error(attemptError?.message || 'Commerce checkout attempt not found');
+    const eventEnvironment = event?.livemode === true || session?.livemode === true ? 'live' : 'test';
+    const eventAccount = String(event?.account || 'platform');
+    if (attempt.provider_environment !== eventEnvironment || attempt.provider_account_key !== eventAccount) {
+      throw new Error('Commerce checkout provider context mismatch');
+    }
+    if (attempt.provider_session_id && attempt.provider_session_id !== session.id) {
+      throw new Error('Commerce checkout attempt session mismatch');
+    }
+  } else if (order.stripe_session_id !== session.id) {
+    throw new Error('Commerce order Stripe session mismatch');
+  }
   if (Number(order.total_inc_vat_minor || 0) !== Number(session.amount_total || 0)) {
     throw new Error('Commerce order total mismatch');
   }
@@ -769,17 +823,94 @@ async function handleCommerceOrder(
   }
 }
 
-async function handleCommerceRefund(object: StripeRefundObject, eventType: string, serviceClient: ServiceClient) {
-  if (eventType === 'refund.updated' && object?.status !== 'succeeded') return;
+async function handleCommerceRefund(object: StripeRefundObject, eventType: string, serviceClient: ServiceClient, event: any) {
   const paymentIntentId = stripeId(object?.payment_intent);
   if (!paymentIntentId) return;
-  const { data: order, error: orderError } = await serviceClient.from('commerce_orders')
-    .select('id, venue_id, customer_id, guest_name, status, stripe_payment_intent_id, booking_receipt_id, total_inc_vat_minor, vat_amount_minor, currency, metadata')
+  const refundObjects = eventType === 'charge.refunded'
+    ? (object.refunds?.data || [])
+    : [object];
+  const metadataOrderId = refundObjects
+    .map((refund) => String(refund?.metadata?.commerce_order_id || '').trim())
+    .find(Boolean) || '';
+  let { data: order, error: orderError } = await serviceClient.from('commerce_orders')
+    .select('id, venue_id, customer_id, guest_name, status, stripe_payment_intent_id, booking_receipt_id, total_inc_vat_minor, vat_amount_minor, currency, metadata, checkout_attempt_id')
     .eq('stripe_payment_intent_id', paymentIntentId)
     .maybeSingle();
   if (orderError) throw new Error(orderError.message);
-  if (!order || order.status === 'cancelled') return;
-  if (!['paid', 'attention'].includes(order.status)) return;
+  if (!order && metadataOrderId) {
+    const fallback = await serviceClient.from('commerce_orders')
+      .select('id, venue_id, customer_id, guest_name, status, stripe_payment_intent_id, booking_receipt_id, total_inc_vat_minor, vat_amount_minor, currency, metadata, checkout_attempt_id')
+      .eq('id', metadataOrderId)
+      .maybeSingle();
+    order = fallback.data;
+    orderError = fallback.error;
+    if (orderError) throw new Error(orderError.message);
+  }
+  if (!order) return;
+  if (order.checkout_attempt_id && order.status === 'checkout_pending') {
+    throw new Error('Tracked refund arrived before local payment finalization; Stripe must retry the event');
+  }
+  if (order.checkout_attempt_id && order.stripe_payment_intent_id !== paymentIntentId) {
+    throw new Error('Tracked refund payment identity mismatch');
+  }
+  if (order.checkout_attempt_id) {
+    // A full tracked refund previously moved the order to cancelled. Stripe can
+    // subsequently report that refund as failed, so cancelled is intentionally
+    // still eligible for tracked refund reconciliation. Physical truth remains
+    // owned by the allocation/pickup/disposition commands, not this webhook.
+    if (!['paid', 'attention', 'cancelled'].includes(order.status)) return;
+    for (const refundObject of refundObjects) {
+      const providerRefundId = String(refundObject.id || '').trim();
+      const amountMinor = Number(refundObject.amount || 0);
+      if (!providerRefundId || amountMinor <= 0) continue;
+      const rawProviderStatus = String(refundObject.status || 'succeeded');
+      const providerStatus = rawProviderStatus === 'succeeded'
+        ? 'succeeded'
+        : ['failed', 'canceled'].includes(rawProviderStatus) ? 'failed' : 'pending';
+      const metadataRefundId = String(refundObject.metadata?.commerce_refund_id || '').trim();
+      const { data: preparedRefund, error: preparedError } = metadataRefundId
+        ? await serviceClient.from('commerce_refunds').select('id, provider_environment, provider_account_key, provider_refund_id, amount_inc_vat_minor')
+          .eq('id', metadataRefundId).eq('commerce_order_id', order.id).maybeSingle()
+        : await serviceClient.from('commerce_refunds').select('id, provider_environment, provider_account_key, provider_refund_id, amount_inc_vat_minor')
+          .eq('provider_refund_id', providerRefundId).eq('commerce_order_id', order.id).maybeSingle();
+      if (preparedError) throw new Error(preparedError.message);
+      if (preparedRefund) {
+        const eventEnvironment = event?.livemode === true ? 'live' : 'test';
+        const eventAccount = String(event?.account || 'platform');
+        if (preparedRefund.provider_environment !== eventEnvironment
+          || preparedRefund.provider_account_key !== eventAccount) {
+          throw new Error('Commerce refund provider context mismatch');
+        }
+        if ((preparedRefund.provider_refund_id && preparedRefund.provider_refund_id !== providerRefundId)
+          || Number(preparedRefund.amount_inc_vat_minor || 0) !== amountMinor) {
+          throw new Error('Commerce refund provider identity mismatch');
+        }
+        const { error: reconcileError } = await serviceClient.rpc('commerce_r2a_reconcile_refund', {
+          p_refund_id: preparedRefund.id,
+          p_provider_refund_id: providerRefundId,
+          p_provider_status: providerStatus,
+          p_provider_response: refundObject,
+          p_error: providerStatus === 'failed' ? `Stripe refund ${rawProviderStatus}` : null,
+        });
+        if (reconcileError) throw new Error(reconcileError.message);
+      } else if (providerStatus === 'succeeded') {
+        const { error: externalError } = await serviceClient.rpc('commerce_r2a_record_external_refund', {
+          p_order_id: order.id,
+          p_provider_refund_id: providerRefundId,
+          p_amount_inc_vat_minor: amountMinor,
+          p_provider_environment: event?.livemode === true ? 'live' : 'test',
+          p_provider_account_key: String(event?.account || 'platform'),
+          p_provider_response: refundObject,
+        });
+        if (externalError) throw new Error(externalError.message);
+      }
+    }
+    return;
+  }
+
+  if (order.status === 'cancelled' || !['paid', 'attention'].includes(order.status)) return;
+
+  if (eventType !== 'charge.refunded' && object?.status !== 'succeeded') return;
 
   const refundedMinor = Number(eventType === 'charge.refunded' ? object?.amount_refunded : object?.amount || 0);
   const fullRefund = refundedMinor >= Number(order.total_inc_vat_minor || 0);
