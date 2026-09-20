@@ -42,16 +42,20 @@ function reportFrontendVersionDiagnostic(
   } else if (event === "version_check_failure") {
     markReliabilityMilestone("version_check_failed", {
       trigger: detail.trigger,
-      error_class: "transport",
+      error_class: detail.failure_kind || "transport",
     });
   }
-  const level = event === "convergence_failure" ? "error" : event === "version_checked" ? "info" : "warn";
+  const level = event === "convergence_failure"
+    ? "error"
+    : event === "version_checked" || event === "convergence_success" ? "info" : "warn";
   console[level](`[frontend-version] ${event}`, detail);
   if (event === "version_checked") return;
   void reportClientEvent({
     event_type: `frontend_${event}`,
-    severity: event === "convergence_failure" ? "error" : event === "reload_deferred" ? "info" : "warning",
-    message: event.replaceAll("_", " "),
+    severity: event === "convergence_failure"
+      ? "error"
+      : event === "reload_deferred" || event === "convergence_success" ? "info" : "warning",
+    message: event.replace(/_/g, " "),
     fingerprint: `frontend-version:${event}:${String(detail.current_sha || "unknown")}`,
     metadata: detail,
     privacy_safe: true,

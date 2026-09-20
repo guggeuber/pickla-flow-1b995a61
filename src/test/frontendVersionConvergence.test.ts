@@ -7,10 +7,12 @@ import {
   type FrontendVersionTrigger,
 } from "@/lib/frontendVersionCoordinator";
 import { recoverLegacyClients, type LegacyRecoveryClient } from "@/lib/legacyClientRecovery";
+import { FrontendReleaseLookupError } from "@/lib/frontendRelease";
 import { classifyFrontendReload } from "@/lib/frontendVersionPolicy";
 
 const buildA = { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", built_at: "2026-07-02T23:59:00.000Z" };
 const buildB = { sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", built_at: "2026-09-13T10:06:00.000Z" };
+const buildC = { sha: "cccccccccccccccccccccccccccccccccccccccc", built_at: "2026-09-20T10:06:00.000Z" };
 
 function coordinatorHarness(input?: {
   pathname?: string;
@@ -18,11 +20,12 @@ function coordinatorHarness(input?: {
   serverBuild?: typeof buildA;
   controller?: { postMessage: ReturnType<typeof vi.fn> } | null;
   fetchError?: Error;
+  reloadMarker?: string | null;
 }) {
   let pathname = input?.pathname ?? "/today";
   let online = input?.online ?? true;
   let now = 100_000;
-  let marker: string | null = null;
+  let marker: string | null = input?.reloadMarker ?? null;
   const reload = vi.fn();
   const report = vi.fn();
   const update = vi.fn(async () => undefined);
@@ -41,6 +44,9 @@ function coordinatorHarness(input?: {
     getReloadMarker: () => marker,
     setReloadMarker: (sha) => { marker = sha; },
     now: () => now,
+    getPwaSurface: () => pathname.startsWith("/desk")
+      ? "desk"
+      : pathname.startsWith("/hub/admin") ? "admin" : "customer",
     report,
   };
   const coordinator = createFrontendVersionCoordinator(deps);
@@ -114,12 +120,117 @@ describe("frontend version convergence", () => {
     expect(harness.reload).toHaveBeenCalledTimes(1);
   });
 
-  it("acknowledges a new worker and lets a modern stale client converge once", () => {
+  it("acknowledges a new worker but requires the authoritative endpoint before convergence", async () => {
     const harness = coordinatorHarness();
     const reply = vi.fn();
     harness.coordinator.handleWorkerMessage({ type: "PICKLA_VERSION_ACTIVATED", build: buildB }, reply);
     expect(reply).toHaveBeenCalledWith({ type: "PICKLA_VERSION_CLIENT_ACK", running_build: buildA });
-    expect(harness.reload).toHaveBeenCalledTimes(1);
+    expect(harness.reload).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(harness.fetchCurrentBuild).toHaveBeenCalled());
+    await vi.waitFor(() => expect(harness.reload).toHaveBeenCalledTimes(1));
+  });
+
+  it("never treats an older controller announcement as authoritative current truth", async () => {
+    const historicalWorker = {
+      sha: "dddddddddddddddddddddddddddddddddddddddd",
+      built_at: "2026-06-01T10:00:00.000Z",
+    };
+    const harness = coordinatorHarness({ serverBuild: buildA });
+    harness.coordinator.handleWorkerMessage({ type: "PICKLA_SW_BUILD", build: historicalWorker });
+    expect(harness.reload).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(harness.fetchCurrentBuild).toHaveBeenCalled());
+    expect(harness.report).not.toHaveBeenCalledWith("stale_detected", expect.objectContaining({
+      current_sha: buildA.sha,
+    }));
+  });
+
+  it("rejects an older endpoint identity without reloading the current client", async () => {
+    const harness = coordinatorHarness({ serverBuild: buildA });
+    const currentHarness = createFrontendVersionCoordinator({
+      runningBuild: buildB,
+      fetchCurrentBuild: harness.fetchCurrentBuild,
+      getPathname: () => "/today",
+      isOnline: () => true,
+      getController: () => null,
+      reload: harness.reload,
+      getReloadMarker: () => null,
+      setReloadMarker: vi.fn(),
+      now: () => 100_000,
+      getPwaSurface: () => "customer",
+      report: harness.report,
+    });
+    await currentHarness.check("bootstrap", true);
+    expect(harness.reload).not.toHaveBeenCalled();
+    expect(harness.report).toHaveBeenCalledWith("backward_version_rejected", expect.objectContaining({
+      running_sha: buildB.sha,
+      authoritative_sha: buildA.sha,
+      reload_count: 0,
+    }));
+  });
+
+  it("converges A and B to C while C rejects stale A and B responses", async () => {
+    for (const runningBuild of [buildA, buildB]) {
+      const reload = vi.fn();
+      const coordinator = createFrontendVersionCoordinator({
+        runningBuild,
+        fetchCurrentBuild: async () => buildC,
+        getPathname: () => "/today",
+        isOnline: () => true,
+        getController: () => null,
+        reload,
+        getReloadMarker: () => null,
+        setReloadMarker: vi.fn(),
+        now: () => 100_000,
+        getPwaSurface: () => "customer",
+        report: vi.fn(),
+      });
+      await coordinator.check("bootstrap", true);
+      expect(reload).toHaveBeenCalledTimes(1);
+    }
+
+    for (const staleBuild of [buildA, buildB]) {
+      const reload = vi.fn();
+      const coordinator = createFrontendVersionCoordinator({
+        runningBuild: buildC,
+        fetchCurrentBuild: async () => staleBuild,
+        getPathname: () => "/today",
+        isOnline: () => true,
+        getController: () => null,
+        reload,
+        getReloadMarker: () => null,
+        setReloadMarker: vi.fn(),
+        now: () => 100_000,
+        getPwaSurface: () => "customer",
+        report: vi.fn(),
+      });
+      await coordinator.check("pageshow", true);
+      expect(reload).not.toHaveBeenCalled();
+    }
+  });
+
+  it("represents the production regression: current a8b7ce9 rejects historical d047229", async () => {
+    const current = { sha: "a8b7ce92c969970c680f22705f601bf82e61abe2", built_at: "2026-09-18T22:51:05.654Z" };
+    const historical = { sha: "d0472290c67cc79b4add324da4699c62aab19a77", built_at: "2026-09-18T13:46:42.000Z" };
+    const reload = vi.fn();
+    const report = vi.fn();
+    const coordinator = createFrontendVersionCoordinator({
+      runningBuild: current,
+      fetchCurrentBuild: async () => historical,
+      getPathname: () => "/",
+      isOnline: () => true,
+      getController: () => null,
+      reload,
+      getReloadMarker: () => null,
+      setReloadMarker: vi.fn(),
+      now: () => 100_000,
+      getPwaSurface: () => "customer",
+      report,
+    });
+    await coordinator.check("bootstrap", true);
+    expect(reload).not.toHaveBeenCalled();
+    expect(report).toHaveBeenCalledWith("backward_version_rejected", expect.objectContaining({
+      authoritative_sha: historical.sha,
+    }));
   });
 
   it("defers checkout and auth surfaces, then converges after navigation to a safe view", async () => {
@@ -168,13 +279,64 @@ describe("frontend version convergence", () => {
     expect(harness.reload).toHaveBeenCalledTimes(1);
   });
 
-  it("never reloads when version.json fails", async () => {
+  it("never reloads when the authoritative endpoint fails", async () => {
     const harness = coordinatorHarness({ fetchError: new Error("offline") });
     await harness.coordinator.check("bootstrap", true);
     expect(harness.reload).not.toHaveBeenCalled();
     expect(harness.report).toHaveBeenCalledWith("version_check_failure", expect.objectContaining({
       stage: "version_check",
+      reload_count: 0,
     }));
+  });
+
+  it.each([
+    ["timeout", new FrontendReleaseLookupError("timeout", "timed out")],
+    ["500", new FrontendReleaseLookupError("http_5xx", "500", 500)],
+    ["malformed JSON", new FrontendReleaseLookupError("malformed_json", "bad JSON")],
+    ["missing SHA", new FrontendReleaseLookupError("missing_sha", "missing SHA")],
+  ])("fails safely without a reload on endpoint %s", async (_label, fetchError) => {
+    const harness = coordinatorHarness({ fetchError });
+    await harness.coordinator.check("bootstrap", true);
+    expect(harness.reload).not.toHaveBeenCalled();
+    expect(harness.report).toHaveBeenCalledWith("version_check_failure", expect.objectContaining({
+      failure_kind: fetchError.failureKind,
+      reload_count: 0,
+    }));
+  });
+
+  it("reports successful convergence after the reloaded build proves itself current", async () => {
+    const harness = coordinatorHarness({ serverBuild: buildA, reloadMarker: buildA.sha });
+    await harness.coordinator.check("bootstrap", true);
+    expect(harness.report).toHaveBeenCalledWith("convergence_success", expect.objectContaining({
+      running_sha: buildA.sha,
+      authoritative_sha: buildA.sha,
+      pwa_surface: "customer",
+      reload_count: 1,
+    }));
+  });
+
+  it("repeated stale responses never create a reload loop", async () => {
+    const reload = vi.fn();
+    const report = vi.fn();
+    let now = 100_000;
+    const coordinator = createFrontendVersionCoordinator({
+      runningBuild: buildB,
+      fetchCurrentBuild: async () => buildA,
+      getPathname: () => "/today",
+      isOnline: () => true,
+      getController: () => null,
+      reload,
+      getReloadMarker: () => null,
+      setReloadMarker: vi.fn(),
+      now: () => now,
+      getPwaSurface: () => "customer",
+      report,
+    });
+    await coordinator.check("bootstrap", true);
+    now += 60_000;
+    await coordinator.check("pageshow", true);
+    expect(reload).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalledWith("convergence_executed", expect.anything());
   });
 
   it("does not classify a same-build controllerchange transport failure as convergence failure", async () => {
@@ -324,6 +486,7 @@ describe("version policy and production contract", () => {
     ]));
     expect(headers.get("/sw.js")).toContain("no-store");
     expect(headers.get("/version.json")).toContain("no-store");
+    expect(headers.get("/api/release")).toContain("no-store");
     expect(headers.get("/manifest.webmanifest")).toContain("must-revalidate");
     expect(headers.get("/manifest-desk.webmanifest")).toContain("must-revalidate");
     expect(headers.get("/manifest-admin.webmanifest")).toContain("must-revalidate");

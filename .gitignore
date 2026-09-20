@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+api/_release-identity.generated.json
 
 # Editor directories and files
 .vscode/*

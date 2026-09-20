@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && npm run verify:public-web-build",
-    "build:dev": "vite build --mode development && npm run verify:public-web-build",
+    "build": "node scripts/generate-release-identity.mjs && vite build && npm run verify:public-web-build",
+    "build:dev": "node scripts/generate-release-identity.mjs && vite build --mode development && npm run verify:public-web-build",
     "lint": "eslint .",
     "ops:agent": "node scripts/ops-agent-check.mjs",
     "preview": "vite preview",

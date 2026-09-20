@@ -90,6 +90,12 @@ registerRoute(
 
 registerRoute(
   ({ url }: { url: URL }) =>
+    url.origin === self.location.origin && url.pathname === '/api/release',
+  new NetworkOnly(),
+);
+
+registerRoute(
+  ({ url }: { url: URL }) =>
     url.hostname.includes('.supabase.co') && url.pathname.startsWith('/functions/v1/'),
   new NetworkOnly(),
 );

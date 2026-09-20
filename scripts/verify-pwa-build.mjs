@@ -7,11 +7,15 @@ function fail(message) {
 
 const distDir = resolve("dist");
 const version = JSON.parse(readFileSync(resolve(distDir, "version.json"), "utf8"));
+const generatedRelease = JSON.parse(readFileSync(resolve("api/_release-identity.generated.json"), "utf8"));
 if (typeof version.sha !== "string" || !/^(local|[0-9a-f]{7,64})$/i.test(version.sha)) {
   fail("version.json has no valid Git SHA");
 }
 if (typeof version.built_at !== "string" || Number.isNaN(Date.parse(version.built_at))) {
   fail("version.json has no valid UTC build timestamp");
+}
+for (const key of ["sha", "built_at", "deployment_id", "deployment_url", "environment"]) {
+  if (version[key] !== generatedRelease[key]) fail(`version.json differs from generated release ${key}`);
 }
 
 const assetNames = readdirSync(resolve(distDir, "assets"));
@@ -30,6 +34,7 @@ if (!html.includes(`/assets/${mainAssetName}`)) fail("index.html does not refere
 if (/(?:"url"|url):\s*["']\/?(?:index\.html|version\.json)["']/.test(worker)) {
   fail("HTML or version.json must not be in the service-worker precache");
 }
+if (!worker.includes("/api/release")) fail("service worker has no NetworkOnly release route");
 for (const contractToken of ["PICKLA_VERSION_ACTIVATED", "PICKLA_VERSION_CLIENT_ACK", "PICKLA_GET_BUILD"]) {
   if (!worker.includes(contractToken)) fail(`service worker is missing ${contractToken}`);
 }
@@ -92,6 +97,13 @@ const cacheHeader = (source) => vercel.headers
   .find((header) => header.key.toLowerCase() === "cache-control")?.value;
 if (!cacheHeader("/sw.js")?.includes("no-store")) fail("sw.js is not no-store");
 if (!cacheHeader("/version.json")?.includes("no-store")) fail("version.json is not no-store");
+if (!cacheHeader("/api/release")?.includes("no-store")) fail("authoritative release endpoint is not no-store");
+const releaseHeaders = vercel.headers.find((entry) => entry.source === "/api/release")?.headers || [];
+for (const headerName of ["cdn-cache-control", "vercel-cdn-cache-control"]) {
+  if (!releaseHeaders.find((header) => header.key.toLowerCase() === headerName)?.value.includes("no-store")) {
+    fail(`authoritative release endpoint is missing ${headerName}: no-store`);
+  }
+}
 if (!cacheHeader("/manifest.webmanifest")?.includes("must-revalidate")) fail("manifest is not revalidated");
 if (!cacheHeader("/manifest-desk.webmanifest")?.includes("must-revalidate")) fail("Desk manifest is not revalidated");
 if (!cacheHeader("/manifest-admin.webmanifest")?.includes("must-revalidate")) fail("Admin manifest is not revalidated");

@@ -1,59 +1,74 @@
-# Pickla frontend version contract
+# Pickla frontend release convergence contract
 
-Status: P1 candidate. The future Customer, Desk and Admin multi-PWA split remains blocked until this contract has been verified in production.
+Status: P0 release candidate. Production release requires preview header proof and the physical installed-PWA smoke below.
 
-## Identity
+## Identity and authority
 
-Every production build emits one immutable identity in three places:
+Every deployment generates one identity before the Vite and Vercel Function builds:
 
-- the running JavaScript bundle (`__BUILD_SHA__` and `__BUILD_TIME__`),
-- the active service worker,
-- `/version.json`, served with `Cache-Control: no-store`.
+- Git SHA (`sha`) identifies the code;
+- UTC deployment build time (`built_at`) supplies monotonic ordering;
+- Vercel deployment ID (`deployment_id`) identifies the exact immutable deployment;
+- Vercel deployment URL and environment are diagnostic context.
 
-The Git SHA is the comparison key. The UTC timestamp is diagnostic context only. Neither field contains customer data or secrets.
+The same generated identity is embedded in the JavaScript bundle, the service worker, the diagnostic `version.json` artifact and the dynamic `/api/release` Function.
 
-## Modern clients
+`/api/release` is the only authoritative current-release source. `version.json` is a static artifact and is never used for convergence. Vercel caches static files for a deployment even when a downstream `Cache-Control: no-store` header is configured, so a static filename cannot be authoritative production truth.
 
-The frontend checks `/version.json` on bootstrap, `pageshow`, return to visible state, return online and once per hour while open. Checks and `registration.update()` calls are single-flight and rate-limited.
+## Dynamic endpoint contract
 
-A mismatch is allowed to reload only after the active service worker reports the same SHA as `/version.json`, or when no service worker controls the document. This prevents a reload through an older app-shell worker. The target SHA is written to session storage before reload, allowing at most one convergence reload for that build.
+`GET /api/release?request_id=<one-time-id>` is public, tiny, read-only and contains no customer or authentication data. It echoes the one-time request ID and adds `served_at`. The Function verifies that its generated SHA and deployment ID match Vercel's runtime system variables before answering.
 
-Auth callbacks, payment preparation/finalization, booking and membership forms, claims, sensitive forms, and explicitly marked in-flight transactions defer reload. Route changes, lifecycle checks and release of the critical section retry the pending convergence. Input in an HTML form creates an unsaved-form critical section until submit, reset or route change.
+The Function and `vercel.json` set:
 
-## Legacy clients
+- `Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0`;
+- `CDN-Cache-Control: private, no-store, max-age=0`;
+- `Vercel-CDN-Cache-Control: private, no-store, max-age=0`;
+- `Pragma: no-cache` and `Expires: 0`.
 
-On activation, the service worker claims clients and sends a build handshake. Modern clients acknowledge it. A same-origin client that does not acknowledge within the bounded grace period is treated as legacy. If its URL is safe, the worker calls `WindowClient.navigate(client.url)` to perform a real document navigation. This does not depend on old JavaScript understanding a message contract.
+The browser additionally uses `cache: no-store`, unique query correlation, and `Cache-Control`/`Pragma` request headers. It rejects a mismatched correlation ID, positive `Age`, `x-vercel-cache: HIT|STALE`, or a response without `no-store`.
 
-Known transaction-sensitive legacy URLs are never navigated blindly. The next real navigation receives current network HTML. Modern clients additionally carry the pending update across SPA route changes.
+## Monotonic comparison
 
-## Cache contract
+A Git SHA is never compared lexically.
 
-- HTML and `sw.js`: no-store or strong revalidation.
-- `/version.json`: no-store.
-- manifest: revalidate.
-- content-hashed `/assets/*`: `public, max-age=31536000, immutable`.
-- authenticated and sensitive API responses: never supplied as stale service-worker cache truth.
+- same SHA: current, no reload;
+- different SHA with later `built_at`: proven newer, eligible for convergence;
+- different SHA with earlier `built_at`: backward release, reject and report;
+- different SHA with equal/invalid time: unknown, fail closed and do not reload.
 
-The service worker must retain `skipWaiting`, `clientsClaim`, cache cleanup, NetworkOnly navigation, and NetworkOnly Supabase Function requests.
+Promoting an older immutable deployment preserves its older generated build time, so a newer resident client does not converge backward. A timeout, non-2xx response, malformed JSON, missing field, runtime/build mismatch, stale-cache signal or otherwise unknown identity also leaves the running client in place.
 
-`npm run verify:pwa-build` is the artifact-level release gate. It proves that the same identity exists in `version.json`, the main bundle and the worker; that HTML/version metadata are not precached; and that the cache-header contract remains intact.
+## Service worker
 
-## Shared future contract
+The root service worker is shared by Customer, Desk and Admin. `/api/release` has an explicit Workbox `NetworkOnly` route and is absent from the precache. Navigation and Supabase Function requests remain `NetworkOnly`; hashed JS/CSS assets remain immutable.
 
-Pickla, Pickla Desk and Pickla Admin must each have a distinct scope and manifest when split, but must share:
+A service-worker build message describes only that worker. It is never authoritative and never directly creates a stale classification or reload target. It can corroborate an already-proven authoritative target. A controlled document reloads only when the controller reports the same SHA as the newer dynamic endpoint.
 
-1. immutable SHA/timestamp identity,
-2. a no-store version endpoint for that surface,
-3. the same safe/deferred state machine,
-4. legacy-client handshake and navigation fallback,
-5. one-reload-per-target-build protection,
-6. privacy-safe convergence diagnostics,
-7. permanent legacy, lifecycle, offline, auth and payment regression gates.
+`skipWaiting`, `clients.claim`, cache cleanup and bounded legacy-client recovery remain in place. Modern clients acknowledge worker activation before any legacy fallback can navigate them.
 
-Do not start the multi-PWA split until production telemetry and physical iOS Home Screen testing prove this P1 convergence release.
+## Safe convergence and failures
 
-## Verification boundary
+The client checks on bootstrap, `pageshow`, return to visible state, return online, controller changes and once per hour. Checks and `registration.update()` are single-flight and rate-limited.
 
-Automated tests cover modern and pre-contract clients, lifecycle triggers, rate limiting, offline recovery, transaction deferral, safe legacy navigation, reload-loop prevention, cache headers, and final build artifacts. Local Chromium verification covers application rendering plus bootstrap and `pageshow` version checks.
+Auth callbacks, checkout/payment finalization, booking and membership forms, claims, sensitive forms, unsaved Desk/Admin inputs and explicit critical sections defer an otherwise valid newer-release reload. Session storage permits at most one reload per authoritative target.
 
-The in-app browser cannot prove the installed iOS Home Screen lifecycle or expose every service-worker inspector surface. Before production release, run the physical iPhone stage smoke in `production-readiness.md`, including a long-resident build-A client converging to build B. Production telemetry must then show successful convergence without reload loops or transaction interruptions.
+Endpoint failures clear unproven pending state and never reload. A successful post-reload same-release check records convergence success.
+
+## Telemetry
+
+Privacy-safe release telemetry includes loaded SHA/build/deployment, authoritative SHA/build/deployment, controller SHA, comparison or failure kind, request correlation ID, trigger, PWA surface and reload count. Dedicated events distinguish stale detection, backward rejection, convergence attempt, convergence success/failure and lookup failure. No user identifier is introduced.
+
+## Verification
+
+`npm run verify:pwa-build` proves shared artifact identity, endpoint headers, explicit service-worker `NetworkOnly` handling, absence of HTML/version metadata from precache, three PWA manifests and immutable hashed assets.
+
+Automated tests cover A→B, B→B, B rejecting stale A, A/B/C, timeout, 500, malformed/missing identity, repeated stale responses, warm resume, Customer/Desk/Admin surfaces, no reload loop, telemetry, non-lexical SHA semantics and the production `a8b7ce9`→historical-SHA regression.
+
+Before production release:
+
+1. Deploy the immutable candidate to isolated preview/stage.
+2. Repeatedly query `/api/release` and verify `Cache-Control`, absence/zero `Age`, `x-vercel-cache` never `HIT|STALE`, no reusable ETag/304 behavior, exact candidate SHA/deployment ID and echoed unique request IDs.
+3. Sample available PoPs through independent probes; record only the regions actually observed.
+4. Run physical installed Customer, Desk and Admin PWA A→candidate and warm-resume smoke tests.
+5. After an approved production release, repeat the header/PoP check on `playpickla.com` and monitor convergence telemetry for backward rejection and loops.

@@ -136,8 +136,9 @@ References:
 
 Pass criteria:
 
-- `npm run prod:check` proves that `version.json`, the main JavaScript bundle, and the service worker contain the same Git SHA.
-- HTML, `sw.js`, and `/version.json` are not retained as stale cache truth; content-hashed assets remain immutable.
+- `npm run prod:check` proves that the generated deployment identity is shared by `version.json`, the main JavaScript bundle, the service worker, and the dynamic release Function input.
+- `/api/release` is the only authoritative release source and must be a dynamic, correlated, no-store response. Static `version.json` is diagnostic only; content-hashed assets remain immutable.
+- Verify `/api/release` has no positive `Age`, never returns `x-vercel-cache: HIT|STALE`, echoes a unique request ID, and reports the exact Vercel deployment ID before promotion.
 - A modern client converges to a new build with at most one safe reload per target SHA.
 - Auth, Stripe, confirmation, booking, membership, and unsaved-form flows defer reload until a safe route or lifecycle retry.
 - A legacy client that cannot understand the current message contract is recovered by service-worker `WindowClient.navigate()` only on a safe same-origin URL.

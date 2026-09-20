@@ -151,7 +151,8 @@ describe("one shared update and security engine", () => {
     const worker = readFileSync(resolve(root, "src/sw.ts"), "utf8");
     expect(worker).toContain("request.mode === 'navigate'");
     expect(worker).toContain("url.pathname.startsWith('/functions/v1/')");
-    expect(worker.match(/new NetworkOnly\(\)/g) || []).toHaveLength(2);
+    expect(worker).toContain("url.pathname === '/api/release'");
+    expect(worker.match(/new NetworkOnly\(\)/g) || []).toHaveLength(3);
     expect(worker).not.toContain("NetworkFirst");
     expect(worker).not.toContain("CacheFirst");
   });
@@ -171,6 +172,7 @@ describe("one shared update and security engine", () => {
     expect(headers.get("/manifest-admin.webmanifest")).toContain("must-revalidate");
     expect(headers.get("/sw.js")).toContain("no-store");
     expect(headers.get("/version.json")).toContain("no-store");
+    expect(headers.get("/api/release")).toContain("no-store");
     expect(headers.get("/assets/(.*)")).toContain("immutable");
   });
 

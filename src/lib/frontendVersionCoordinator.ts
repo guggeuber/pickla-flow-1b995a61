@@ -3,12 +3,17 @@ import {
   RUNNING_FRONTEND_BUILD,
   type FrontendBuildIdentity,
 } from "@/lib/frontendBuild";
+import {
+  AUTHORITATIVE_RELEASE_URL,
+  classifyFrontendRelease,
+  fetchAuthoritativeFrontendRelease,
+  FrontendReleaseLookupError,
+} from "@/lib/frontendRelease";
 import { classifyFrontendReload } from "@/lib/frontendVersionPolicy";
 
-export const FRONTEND_VERSION_URL = "/version.json";
+export const FRONTEND_VERSION_URL = AUTHORITATIVE_RELEASE_URL;
 export const FRONTEND_VERSION_CHECK_INTERVAL_MS = 60 * 60 * 1_000;
 export const FRONTEND_VERSION_MIN_CHECK_GAP_MS = 30_000;
-const VERSION_FETCH_TIMEOUT_MS = 8_000;
 const RELOAD_MARKER_KEY = "pickla:frontend-convergence-build";
 
 export type FrontendVersionTrigger =
@@ -25,8 +30,10 @@ export type FrontendVersionDiagnostic =
   | "version_checked"
   | "version_check_failure"
   | "stale_detected"
+  | "backward_version_rejected"
   | "reload_deferred"
   | "convergence_executed"
+  | "convergence_success"
   | "convergence_failure";
 
 type WorkerMessenger = {
@@ -47,6 +54,7 @@ export type FrontendVersionCoordinatorDependencies = {
   getReloadMarker: () => string | null;
   setReloadMarker: (sha: string) => void;
   now: () => number;
+  getPwaSurface: () => string;
   report: (event: FrontendVersionDiagnostic, detail: Record<string, unknown>) => void;
 };
 
@@ -64,13 +72,23 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
   let lastStaleSha: string | null = null;
   let lastDeferredKey: string | null = null;
   let lastFailureKey: string | null = null;
+  let convergenceSuccessReported = false;
   const criticalReasons = new Map<string, number>();
 
   const baseDetail = (build?: FrontendBuildIdentity | null) => ({
     running_sha: deps.runningBuild.sha,
     running_built_at: deps.runningBuild.built_at,
+    running_deployment_id: deps.runningBuild.deployment_id ?? null,
     current_sha: build?.sha ?? currentServerBuild?.sha ?? null,
     current_built_at: build?.built_at ?? currentServerBuild?.built_at ?? null,
+    authoritative_sha: build?.sha ?? currentServerBuild?.sha ?? null,
+    authoritative_built_at: build?.built_at ?? currentServerBuild?.built_at ?? null,
+    authoritative_deployment_id: build?.deployment_id ?? currentServerBuild?.deployment_id ?? null,
+    controller_sha: controllerBuild?.sha ?? null,
+    request_id: "request_id" in (build || {})
+      ? (build as FrontendBuildIdentity & { request_id?: string }).request_id ?? null
+      : null,
+    pwa_surface: deps.getPwaSurface(),
   });
 
   const pingController = () => {
@@ -93,6 +111,7 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
           trigger,
           stage: "service_worker_update",
           error: error instanceof Error ? error.message : String(error),
+          reload_count: 0,
         });
       })
       .finally(() => {
@@ -111,6 +130,7 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
           ...baseDetail(build),
           trigger,
           stage: "reload_already_attempted",
+          reload_count: 1,
         });
       }
       return;
@@ -121,6 +141,7 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
       ...baseDetail(build),
       trigger,
       pathname: deps.getPathname(),
+      reload_count: 1,
     });
     deps.reload();
   };
@@ -180,11 +201,40 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
       try {
         const build = await deps.fetchCurrentBuild();
         currentServerBuild = build;
-        deps.report("version_checked", { ...baseDetail(build), trigger });
-        if (build.sha === deps.runningBuild.sha) {
+        const relation = classifyFrontendRelease(deps.runningBuild, build);
+        deps.report("version_checked", { ...baseDetail(build), trigger, relation });
+        if (relation === "same") {
           pendingBuild = null;
           lastStaleSha = null;
+          if (!convergenceSuccessReported && deps.getReloadMarker() === deps.runningBuild.sha) {
+            convergenceSuccessReported = true;
+            deps.report("convergence_success", {
+              ...baseDetail(build),
+              trigger,
+              reload_count: 1,
+            });
+          }
           return;
+        }
+
+        if (relation === "older") {
+          pendingBuild = null;
+          deps.report("backward_version_rejected", {
+            ...baseDetail(build),
+            trigger,
+            stage: "release_comparison",
+            failure_kind: "older_release",
+            reload_count: 0,
+          });
+          return;
+        }
+
+        if (relation === "unknown") {
+          pendingBuild = null;
+          throw new FrontendReleaseLookupError(
+            "unknown_release",
+            "authoritative release ordering could not be proven",
+          );
         }
 
         if (lastStaleSha !== build.sha) {
@@ -193,17 +243,22 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
             ...baseDetail(build),
             trigger,
             pathname: deps.getPathname(),
+            relation,
           });
         }
         await attemptConvergence(build, trigger);
       } catch (error: unknown) {
-        const staleBuild = pendingBuild
-          ?? (currentServerBuild?.sha !== deps.runningBuild.sha ? currentServerBuild : null);
-        deps.report(staleBuild ? "convergence_failure" : "version_check_failure", {
+        pendingBuild = null;
+        const lookupError = error instanceof FrontendReleaseLookupError ? error : null;
+        deps.report("version_check_failure", {
           ...baseDetail(),
           trigger,
           stage: "version_check",
           error: error instanceof Error ? error.message : String(error),
+          failure_kind: lookupError?.failureKind ?? "transport",
+          status: lookupError?.status ?? null,
+          request_id: lookupError?.requestId ?? null,
+          reload_count: 0,
         });
       } finally {
         checkInFlight = null;
@@ -230,20 +285,11 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
       });
     }
 
-    if (build.sha !== deps.runningBuild.sha) {
-      if (lastStaleSha !== build.sha) {
-        lastStaleSha = build.sha;
-        deps.report("stale_detected", {
-          ...baseDetail(build),
-          trigger: "worker_activation",
-          pathname: deps.getPathname(),
-        });
-      }
-      void attemptConvergence(build, "worker_activation");
-    } else if (pendingBuild?.sha === build.sha) {
-      pendingBuild = null;
-    } else if (pendingBuild) {
+    if (pendingBuild) {
       void attemptConvergence(pendingBuild, "controllerchange");
+    }
+    if (build.sha !== deps.runningBuild.sha || message.type === "PICKLA_VERSION_ACTIVATED") {
+      void check("worker_refresh", true);
     }
   };
 
@@ -293,27 +339,6 @@ export function createFrontendVersionCoordinator(deps: FrontendVersionCoordinato
   };
 }
 
-async function fetchCurrentFrontendBuild(): Promise<FrontendBuildIdentity> {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), VERSION_FETCH_TIMEOUT_MS);
-  try {
-    const url = new URL(FRONTEND_VERSION_URL, window.location.origin);
-    url.searchParams.set("t", String(Date.now()));
-    const response = await fetch(url, {
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`version endpoint returned ${response.status}`);
-    const build = parseFrontendBuildIdentity(await response.json());
-    if (!build) throw new Error("version endpoint returned an invalid build identity");
-    return build;
-  } finally {
-    window.clearTimeout(timeout);
-  }
-}
-
 let installedCoordinator: FrontendVersionCoordinator | null = null;
 let releaseDirtyFormGuard: (() => void) | null = null;
 
@@ -324,7 +349,7 @@ export function installFrontendVersionCoordinator(
 
   const coordinator = createFrontendVersionCoordinator({
     runningBuild: RUNNING_FRONTEND_BUILD,
-    fetchCurrentBuild: fetchCurrentFrontendBuild,
+    fetchCurrentBuild: fetchAuthoritativeFrontendRelease,
     getPathname: () => window.location.pathname,
     isOnline: () => navigator.onLine,
     getController: () => navigator.serviceWorker?.controller ?? null,
@@ -344,6 +369,7 @@ export function installFrontendVersionCoordinator(
       }
     },
     now: () => Date.now(),
+    getPwaSurface: () => document.documentElement.dataset.pwaSurface || "customer",
     report,
   });
   installedCoordinator = coordinator;

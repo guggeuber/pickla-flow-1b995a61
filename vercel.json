@@ -4,6 +4,11 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "functions": {
+    "api/release.ts": {
+      "includeFiles": "api/_release-identity.generated.json"
+    }
+  },
   "headers": [
     {
       "source": "/sw.js",
@@ -23,6 +28,17 @@
       "headers": [
         { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" },
         { "key": "Content-Type", "value": "application/json; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/api/release",
+      "headers": [
+        { "key": "Cache-Control", "value": "private, no-store, no-cache, must-revalidate, max-age=0" },
+        { "key": "CDN-Cache-Control", "value": "private, no-store, max-age=0" },
+        { "key": "Vercel-CDN-Cache-Control", "value": "private, no-store, max-age=0" },
+        { "key": "Content-Type", "value": "application/json; charset=utf-8" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" }
       ]
     },
     {
