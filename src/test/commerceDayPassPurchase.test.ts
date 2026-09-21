@@ -7,6 +7,10 @@ const orderPage = readFileSync("src/pages/CommerceOrderPage.tsx", "utf8");
 const playPage = readFileSync("src/pages/PlayPage.tsx", "utf8");
 const commerceApi = readFileSync("supabase/functions/api-commerce/index.ts", "utf8");
 const webhook = readFileSync("supabase/functions/api-stripe-webhook/index.ts", "utf8");
+const cancellationMigration = readFileSync(
+  "supabase/migrations/20260921140000_activity_cancellation_capacity_truth.sql",
+  "utf8",
+);
 const pricing = readFileSync("supabase/functions/_shared/activity_pricing.ts", "utf8");
 const adminSchedule = readFileSync("src/components/admin/AdminSchedule.tsx", "utf8");
 
@@ -50,7 +54,9 @@ describe("Commerce Heldagspass purchase", () => {
     expect(commerceApi).toContain("entryType = purchaseKind === 'day_pass' ? 'day_access' : 'session_ticket'");
     expect(commerceApi).toContain(".eq('commerce_order_id', order.id)");
     expect(commerceApi).toContain(".update({ user_id: userId })");
-    expect(webhook).toContain(".update({ status: 'cancelled' })");
+    expect(webhook).toContain("cancel_activity_registration_participation");
+    expect(cancellationMigration).toContain("UPDATE public.day_passes");
+    expect(cancellationMigration).toContain("UPDATE public.access_entitlements");
     expect(orderPage).toContain('purchaseConfirmed && hasParticipation\n        ? "Platsen är din"');
   });
 

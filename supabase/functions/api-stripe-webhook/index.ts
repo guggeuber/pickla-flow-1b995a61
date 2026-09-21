@@ -934,28 +934,18 @@ async function handleCommerceRefund(object: StripeRefundObject, eventType: strin
     .maybeSingle();
   if (lineError) throw new Error(lineError.message);
   if (participation?.session_registration_id) {
-    const { error: registrationError } = await serviceClient.from('session_registrations')
-      .update({ status: 'cancelled' })
-      .eq('id', participation.session_registration_id)
-      .neq('status', 'cancelled');
+    const refundId = String(object?.id || paymentIntentId);
+    const { error: registrationError } = await serviceClient.rpc('cancel_activity_registration_participation', {
+      p_registration_id: participation.session_registration_id,
+      p_order_id: order.id,
+      p_actor_user_id: null,
+      p_source: 'stripe_refund',
+      p_reason: 'full_stripe_refund',
+      p_request_id: `stripe-refund:${refundId}`,
+      p_refund_id: refundId,
+      p_requested_at: new Date().toISOString(),
+    });
     if (registrationError) throw new Error(registrationError.message);
-    const dayPassPurchase = participation.product_key === 'day_access'
-      || participation.resolver_snapshot?.purchase_kind === 'day_pass';
-    let entitlementQuery = serviceClient.from('access_entitlements')
-      .update({ status: 'revoked' })
-      .neq('status', 'revoked');
-    entitlementQuery = dayPassPurchase
-      ? entitlementQuery.eq('source_type', 'commerce_order').eq('source_id', order.id)
-      : entitlementQuery.eq('source_type', 'session_ticket').eq('source_id', participation.session_registration_id);
-    const { error: entitlementError } = await entitlementQuery;
-    if (entitlementError) throw new Error(entitlementError.message);
-    if (dayPassPurchase) {
-      const { error: passError } = await serviceClient.from('day_passes')
-        .update({ status: 'cancelled' })
-        .eq('commerce_order_id', order.id)
-        .neq('status', 'cancelled');
-      if (passError) throw new Error(passError.message);
-    }
   }
   if (participation?.series_commitment_id) {
     const { error: commitmentError } = await serviceClient.from('series_commitments').update({

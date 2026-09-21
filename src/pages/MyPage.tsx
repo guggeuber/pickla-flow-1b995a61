@@ -1482,7 +1482,7 @@ function SessionRegistrationDetailsSheet({
     && ["paid", "free"].includes(cancellationState);
   const cancellationBlocksCheckIn = ["refund_pending", "refunded", "cancelled", "attention"].includes(cancellationState);
   const cancellationStatus = ({
-    refund_pending: { label: "Återbetalning pågår", detail: "Platsen återkallas när Stripe har bekräftat återbetalningen." },
+    refund_pending: { label: "Avbokad · Återbetalning pågår", detail: "Platsen är släppt. Återbetalningen behandlas separat av Stripe." },
     refunded: { label: "Återbetald", detail: "Platsen är avbokad och betalningen återförd." },
     cancelled: { label: "Avbokad", detail: "Platsen är inte längre aktiv." },
     started: { label: "Avbokning stängd", detail: "Aktiviteten har redan startat." },

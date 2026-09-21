@@ -717,6 +717,8 @@ export interface CommerceRegistrationManagement {
   registration_id?: string;
   paid?: boolean;
   cancellation_pending?: boolean;
+  participation_status?: string;
+  has_place?: boolean;
   receipt_payment_status?: string | null;
   policy?: "before_activity_start";
 }

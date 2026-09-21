@@ -1,106 +1,82 @@
 # Stage Environment
 
-> Status: no usable stage environment is currently configured.
->
-> The previous stage Supabase project reference has been retired and must not be
-> used. Until a new isolated stage project is created and documented here, all
-> pre-production validation should use review/preview branches plus explicit
-> manual checks against production setup without deploying.
+> Status: active, isolated, persistent stage environment.
 
-Stage must be isolated from production. Do not point Vercel previews or local experimental branches at the production Supabase project when testing booking, payment, membership, or customer data flows.
+Stage is isolated from production. Never point stage or local payment tests at the production Supabase project, production Stripe account mode, or production customer data.
 
-## Target Setup
+## Canonical Identity
 
-- **Frontend:** `stage.playpickla.com` or a clearly named Vercel preview environment.
-- **Backend:** separate Supabase project. No active stage project ref is configured.
-- **Stripe:** test mode keys and test webhook endpoint.
-- **Email:** Resend test domain/sender or clearly labelled stage sender.
-- **Data:** synthetic venue/customer data only.
+- **Frontend:** `https://stage.playpickla.com`
+- **Supabase branch:** `stage` (persistent)
+- **Supabase project ref:** `anpxxnpevtxhiajxmfji`
+- **Stripe:** TEST mode only
+- **Data:** synthetic stage data only; never copy production customer PII
 
-## Stage Environment Variables
+Production Supabase project ref is `ptnvhbniiiapzbyofctg`. It must never be used for stage migrations, function deployments, seeds, or payment tests.
 
-Vercel stage should use its own values:
+## Runtime Contract
+
+The stage frontend must resolve to the stage ref in its deployed environment:
 
 ```bash
-VITE_SUPABASE_URL=https://<stage-project-ref>.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=<stage-anon-or-publishable-key>
-VITE_SUPABASE_PROJECT_ID=<stage-project-ref>
-VITE_GIPHY_API_KEY=<optional-stage-key>
+VITE_SUPABASE_URL=https://anpxxnpevtxhiajxmfji.supabase.co
+VITE_SUPABASE_PROJECT_ID=anpxxnpevtxhiajxmfji
+VITE_PICKLA_ENVIRONMENT=stage
 ```
 
-Supabase stage secrets:
+Secret values are managed in the stage projects and must not be committed or printed. Required stage-only backend secrets include Stripe TEST credentials, the stage webhook signing secret, recovery authentication, and `PICKLA_ENVIRONMENT=stage`. `PUBLIC_SITE_URL` must use the canonical stage origin.
+
+Environment guards must reject a stage/live mismatch: the stage ref may use only Stripe TEST, and the production ref may use only Stripe live. Webhook events must also match the configured provider mode.
+
+## Stripe TEST Webhook
+
+The active stage-only destination is:
+
+```text
+https://anpxxnpevtxhiajxmfji.supabase.co/functions/v1/api-stripe-webhook
+```
+
+Verify in the Stripe Dashboard that the account is in TEST/sandbox mode, this destination is active, deliveries succeed, and no stage event is sent to the production endpoint.
+
+## Maintenance
+
+Do not create a replacement stage project while this persistent branch is healthy.
+
+For a release candidate:
+
+1. Verify the branch identity and migration ledger before mutation.
+2. Apply only reviewed forward migrations; never reset or rewrite stage history.
+3. Deploy only functions changed by the candidate, always with `--no-verify-jwt`.
+4. Confirm `https://stage.playpickla.com/api/release` and deployed environment point to `anpxxnpevtxhiajxmfji`.
+5. Run provider, recovery, smoke, PWA, CORS, and UI checks with synthetic identities.
+6. Record migration counts, schema fingerprint, function version/hash, and Stripe TEST evidence.
+
+The guarded deployment helper remains available:
 
 ```bash
-STRIPE_SECRET_KEY=<stripe-test-secret-key>
-STRIPE_WEBHOOK_SECRET=<stripe-test-webhook-secret>
-VAPID_PUBLIC_KEY=<stage-vapid-public>
-VAPID_PRIVATE_KEY=<stage-vapid-private>
-RESEND_API_KEY=<stage-resend-key>
-RESEND_WEBHOOK_SECRET=<stage-resend-webhook-secret>
+scripts/deploy-stage-functions.sh anpxxnpevtxhiajxmfji
 ```
 
-## Stage Bring-up
+## Recovery Authentication
 
-Production Supabase project ref is `ptnvhbniiiapzbyofctg`. Never use that ref for stage commands.
-Current stage Supabase project ref: none.
+Recovery endpoints are authenticated stage operations. Verify both sides of the contract:
 
-1. Create the Supabase stage project and write down its project ref.
-2. Create or configure a Vercel stage project/domain, ideally `stage.playpickla.com`.
-3. Add Vercel stage env vars from [../.env.stage.example](../.env.stage.example).
-4. Apply all migrations to the stage database.
-5. Run [../supabase/seed.stage.sql](../supabase/seed.stage.sql) in the stage SQL editor.
-6. Create the optional auth users below in Supabase Auth, then rerun `seed.stage.sql` so roles/profiles/membership attach:
-   - `stage-admin@playpickla.com`
-   - `stage-founder@playpickla.com`
-   - `stage-customer@playpickla.com`
-7. Run `NOTIFY pgrst, 'reload schema';`.
-8. Set Supabase Auth Site URL to `https://stage.playpickla.com`.
-9. Add redirect URLs:
-   - `https://stage.playpickla.com/**`
-   - `https://stage.playpickla.com/auth/callback`
-10. Set Supabase stage secrets listed above.
-11. Deploy all edge functions with `--no-verify-jwt`:
+- unauthenticated requests are rejected;
+- the configured stage recovery credential is accepted;
+- secrets are never printed, committed, copied to frontend variables, or reused in production.
 
-```bash
-scripts/deploy-stage-functions.sh <stage-project-ref>
-```
+## Verification Checklist
 
-The script refuses to deploy if the ref is the known production ref.
+- `stage.playpickla.com` resolves and uses the canonical stage origin.
+- Supabase ref is exactly `anpxxnpevtxhiajxmfji`.
+- Stripe Dashboard visibly shows TEST/sandbox mode.
+- The active webhook URL is the stage function URL above.
+- Migration ledger has unique versions and matches the reviewed candidate chain.
+- Relevant Edge Functions have `verify_jwt=false`; authentication is handled explicitly by the functions.
+- Recovery authentication rejects unauthenticated requests and accepts the stage credential.
+- No production customer email, phone number, payment ID, Stripe customer ID, or other PII exists in stage.
+- Production remains read-only during stage certification.
 
-12. Configure Stripe test webhook to:
-   - `https://<stage-project-ref>.supabase.co/functions/v1/api-stripe-webhook`
-13. Configure Resend/test sender if email smoke tests are included.
+## Stage Seed
 
-## Stage Seed Contents
-
-`supabase/seed.stage.sql` creates or updates:
-
-- venue slug `pickla-arena-sthlm`
-- opening hours
-- 8 pickleball courts and 6 dart boards
-- baseline pricing rules
-- `access_products`
-- `activity_series` and `activity_sessions`
-- Founder and Play membership tiers
-- Founder entitlements: 4 court-hours/week, unlimited Open Play, 4 guest vouchers/month
-- Founder overage price through `membership_tier_pricing`
-- stage display devices
-- optional staff/customer/profile/membership assignments if the stage auth users exist
-
-## Stage Verification
-
-After deployment and seed:
-
-1. Open `https://stage.playpickla.com/?v=pickla-arena-sthlm`.
-2. Log in as `stage-admin@playpickla.com` and verify admin/desk access.
-3. Log in as `stage-founder@playpickla.com` and verify Founder is visible on `/my`.
-4. Run [smoke-tests.md](./smoke-tests.md) against stage.
-5. Confirm Stripe Dashboard is in test mode and webhook delivery points at the stage project ref.
-6. Confirm no production customer emails or phone numbers exist in stage.
-
-## Stage Rules
-
-- Never copy real customer PII into stage.
-- Never use production Stripe keys in stage.
-- Never use stage links for customer-facing operations.
-- Every release candidate should pass the smoke test on stage before prod deploy.
+`supabase/seed.stage.sql` contains synthetic baseline data for local or stage setup. Treat it as additive setup material, not authority to reset the persistent stage database. Auth users are created separately in Supabase Auth and may then be linked by rerunning the relevant idempotent seed sections.

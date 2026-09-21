@@ -521,6 +521,34 @@ async function loadOrderLines(admin: AdminClient, orderId: string): Promise<DbRe
   return (data || []) as DbRecord[];
 }
 
+async function cancelActivityRegistrationParticipation(admin: AdminClient, input: {
+  registrationId: string;
+  orderId?: string | null;
+  actorUserId?: string | null;
+  source: 'customer' | 'staff' | 'system' | 'stripe_refund' | 'repair';
+  reason: string;
+  requestId: string;
+  refundId?: string | null;
+  requestedAt?: string;
+}) {
+  const { data, error } = await admin.rpc('cancel_activity_registration_participation', {
+    p_registration_id: input.registrationId,
+    p_order_id: input.orderId || null,
+    p_actor_user_id: input.actorUserId || null,
+    p_source: input.source,
+    p_reason: input.reason,
+    p_request_id: input.requestId,
+    p_refund_id: input.refundId || null,
+    p_requested_at: input.requestedAt || new Date().toISOString(),
+  });
+  if (error) throw new Error(error.message);
+  const result = Array.isArray(data) ? data[0] : data;
+  if (!result || result.registration_status !== 'cancelled') {
+    throw new Error('Activity participation cancellation did not complete');
+  }
+  return result;
+}
+
 function projectOrderLine(line: DbRecord) {
   const resolver = (line.resolver_snapshot || {}) as DbRecord;
   const debug = (resolver.debug || {}) as DbRecord;
@@ -2992,12 +3020,15 @@ const commerceHandler = async (req: Request) => {
       const order = await loadOrderByReference(admin, reference, userId, true);
       if (order.status === 'cancelled') return jsonResponse(await cartResponse(admin, order), 200, 0);
       if (!['paid', 'attention'].includes(order.status)) return errorResponse('Köpet kan inte avbokas', 409);
-      if (order.metadata?.cancellation_requested_at) {
-        return jsonResponse({ ...(await cartResponse(admin, order)), cancellation_pending: true }, 202, 0);
-      }
-      if (order.status === 'attention') return errorResponse('Köpet behöver hanteras av Pickla innan det kan avbokas.', 409);
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.find((line) => line.commerce_kind === 'participation');
+      const cancellationAlreadyRequested = Boolean(order.metadata?.cancellation_requested_at);
+      if (cancellationAlreadyRequested && (!participation?.activity_session_id || !participation.session_date)) {
+        return jsonResponse({ ...(await cartResponse(admin, order)), cancellation_pending: true }, 202, 0);
+      }
+      if (order.status === 'attention' && !cancellationAlreadyRequested) {
+        return errorResponse('Köpet behöver hanteras av Pickla innan det kan avbokas.', 409);
+      }
       if (participation?.league_team_entry_id) {
         const { data: team, error: teamError } = await admin.from('league_team_entries')
           .select('id, status, league_season_id, league_seasons!inner(fixtures_published_at, activity_series!inner(start_date, start_time, registration_closes_at))')
@@ -3054,6 +3085,30 @@ const commerceHandler = async (req: Request) => {
       if (!participation?.activity_session_id || !participation.session_date) {
         return errorResponse('Endast aktivitetsköp kan avbokas här', 409);
       }
+      if (!participation.session_registration_id) {
+        return errorResponse('Aktivitetsanmälan saknas', 409);
+      }
+
+      const cancellationRequestId = req.headers.get('x-request-id') || crypto.randomUUID();
+      if (cancellationAlreadyRequested) {
+        await cancelActivityRegistrationParticipation(admin, {
+          registrationId: String(participation.session_registration_id),
+          orderId: order.id,
+          actorUserId: userId,
+          source: 'customer',
+          reason: 'customer_self_service_before_activity_start',
+          requestId: cancellationRequestId,
+          refundId: String(order.metadata?.stripe_refund_id || ''),
+          requestedAt: String(order.metadata?.cancellation_requested_at || new Date().toISOString()),
+        });
+        const refreshed = await loadOrderByReference(admin, order.id, userId, true);
+        return jsonResponse({
+          ...(await cartResponse(admin, refreshed)),
+          cancellation_pending: true,
+          participation_cancelled: true,
+        }, 202, 0);
+      }
+
       const { data: activity, error: activityError } = await admin.from('activity_sessions')
         .select('id, start_time, end_time')
         .eq('id', participation.activity_session_id)
@@ -3066,62 +3121,39 @@ const commerceHandler = async (req: Request) => {
       }
 
       if (Number(order.total_inc_vat_minor || 0) === 0) {
-        if (participation.session_registration_id) {
-          const { error: registrationCancelError } = await admin.from('session_registrations')
-            .update({ status: 'cancelled' })
-            .eq('id', participation.session_registration_id)
-            .in('status', ['confirmed', 'checked_in', 'no_show']);
-          if (registrationCancelError) throw new Error(registrationCancelError.message);
-          const dayPassPurchase = participation.product_key === 'day_access'
-            || (participation.resolver_snapshot as any)?.purchase_kind === 'day_pass';
-          let entitlementQuery = admin.from('access_entitlements').update({ status: 'revoked' }).neq('status', 'revoked');
-          entitlementQuery = dayPassPurchase
-            ? entitlementQuery.eq('source_type', 'commerce_order').eq('source_id', order.id)
-            : entitlementQuery.eq('source_type', 'session_ticket').eq('source_id', participation.session_registration_id);
-          const { error: entitlementRevokeError } = await entitlementQuery;
-          if (entitlementRevokeError) throw new Error(entitlementRevokeError.message);
-          if (dayPassPurchase) {
-            const { error: dayPassCancelError } = await admin.from('day_passes')
-              .update({ status: 'cancelled' })
-              .eq('commerce_order_id', order.id)
-              .neq('status', 'cancelled');
-            if (dayPassCancelError) throw new Error(dayPassCancelError.message);
-          }
-        }
-        const { error: pickupCancelError } = await admin.from('commerce_order_lines')
-          .update({ fulfillment_status: 'not_collected' })
-          .eq('commerce_order_id', order.id)
-          .eq('fulfillment_type', 'desk_pickup')
-          .eq('fulfillment_status', 'pending_pickup');
-        if (pickupCancelError) throw new Error(pickupCancelError.message);
-        const { data: cancelled, error: cancelError } = await admin.from('commerce_orders')
-          .update({ status: 'cancelled', metadata: { ...(order.metadata || {}), cancelled_at: new Date().toISOString(), cancellation_source: 'customer' } })
-          .eq('id', order.id)
-          .in('status', ['paid', 'attention'])
-          .select('*')
-          .maybeSingle();
-        if (cancelError) throw new Error(cancelError.message);
-        return jsonResponse(await cartResponse(admin, cancelled || { ...order, status: 'cancelled' }), 200, 0);
+        await cancelActivityRegistrationParticipation(admin, {
+          registrationId: String(participation.session_registration_id),
+          orderId: order.id,
+          actorUserId: userId,
+          source: 'customer',
+          reason: 'customer_self_service_before_activity_start',
+          requestId: cancellationRequestId,
+        });
+        const cancelled = await loadOrderByReference(admin, order.id, userId, true);
+        return jsonResponse({
+          ...(await cartResponse(admin, cancelled)),
+          participation_cancelled: true,
+        }, 200, 0);
       }
 
       if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
       const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
       const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
-      const { data: pending, error: pendingError } = await admin.from('commerce_orders')
-        .update({
-          metadata: {
-            ...(order.metadata || {}),
-            cancellation_requested_at: order.metadata?.cancellation_requested_at || new Date().toISOString(),
-            cancellation_source: 'customer',
-            stripe_refund_id: refund.id,
-          },
-        })
-        .eq('id', order.id)
-        .in('status', ['paid', 'attention'])
-        .select('*')
-        .maybeSingle();
-      if (pendingError) throw new Error(pendingError.message);
-      return jsonResponse({ ...(await cartResponse(admin, pending || order)), cancellation_pending: true }, 202, 0);
+      await cancelActivityRegistrationParticipation(admin, {
+        registrationId: String(participation.session_registration_id),
+        orderId: order.id,
+        actorUserId: userId,
+        source: 'customer',
+        reason: 'customer_self_service_before_activity_start',
+        requestId: cancellationRequestId,
+        refundId: refund.id,
+      });
+      const pending = await loadOrderByReference(admin, order.id, userId, true);
+      return jsonResponse({
+        ...(await cartResponse(admin, pending)),
+        cancellation_pending: true,
+        participation_cancelled: true,
+      }, 202, 0);
     }
 
     if (req.method === 'POST' && path === 'resolve') {
@@ -3643,8 +3675,8 @@ const commerceHandler = async (req: Request) => {
       const refunded = receipt?.payment_status === 'refunded';
       let state = 'paid';
       if (refunded) state = 'refunded';
-      else if (order.status === 'cancelled' || registration.status === 'cancelled') state = 'cancelled';
       else if (cancellationPending) state = 'refund_pending';
+      else if (order.status === 'cancelled' || registration.status === 'cancelled') state = 'cancelled';
       else if (order.status === 'attention') state = 'attention';
       else if (started) state = 'started';
       else if (order.status === 'checkout_pending' || order.status === 'draft') state = 'pending';
@@ -3656,6 +3688,8 @@ const commerceHandler = async (req: Request) => {
         registration_id: registration.id,
         paid: Number(order.total_inc_vat_minor || 0) > 0,
         cancellation_pending: cancellationPending,
+        participation_status: registration.status,
+        has_place: ['confirmed', 'checked_in', 'no_show'].includes(registration.status),
         receipt_payment_status: receipt?.payment_status || null,
         policy: 'before_activity_start',
       }, 200, 0);

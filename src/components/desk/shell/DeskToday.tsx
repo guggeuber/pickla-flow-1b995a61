@@ -1090,7 +1090,8 @@ export function ActivityRow({
       }))
     : fallbackParticipants;
   const name = occurrence?.name || activity.activity_session?.name || activity.notes || "Aktivitet";
-  const playingHosts = participants.filter(isPlayingHostParticipant);
+  const capacityParticipants = participants.filter((participant) => participant.has_place !== false);
+  const playingHosts = capacityParticipants.filter(isPlayingHostParticipant);
   const committedCount = occurrence?.committed_count ?? Number(activity.registered_count || 0);
   const reservedCount = occurrence?.reserved_count ?? 0;
   const playerCount = Math.max(committedCount - playingHosts.length, 0);
@@ -1118,7 +1119,7 @@ export function ActivityRow({
             </p>
           ) : null}
           <p className={AX_TYPE.meta} style={{ color: ax("muted") }}>
-            {participants.filter((participant) => participant.checked_in || participant.status === "checked_in").length}/{committedCount} incheckade totalt
+            {capacityParticipants.filter((participant) => participant.checked_in || participant.status === "checked_in").length}/{committedCount} incheckade totalt
             {reservedCount > 0 ? ` · ${reservedCount} reserverade` : ""}
           </p>
         </div>

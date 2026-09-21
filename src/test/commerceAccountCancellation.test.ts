@@ -5,6 +5,7 @@ const commerceApi = readFileSync("supabase/functions/api-commerce/index.ts", "ut
 const commerceLib = readFileSync("src/lib/commerce.ts", "utf8");
 const myPage = readFileSync("src/pages/MyPage.tsx", "utf8");
 const webhook = readFileSync("supabase/functions/api-stripe-webhook/index.ts", "utf8");
+const cancellationMigration = readFileSync("supabase/migrations/20260921140000_activity_cancellation_capacity_truth.sql", "utf8");
 
 describe("account-owned Commerce activity cancellation", () => {
   it("maps a registration to an account-owned order on the server", () => {
@@ -32,10 +33,11 @@ describe("account-owned Commerce activity cancellation", () => {
     expect(webhook).toContain("payment_status: 'refunded'");
   });
 
-  it("revokes registration, access and pickup state through canonical paths", () => {
-    expect(commerceApi).toContain(".update({ status: 'cancelled' })");
-    expect(commerceApi).toContain(".update({ status: 'revoked' })");
-    expect(commerceApi).toContain("fulfillment_status: 'not_collected'");
+  it("revokes registration and access atomically while refund fulfillment remains separate", () => {
+    expect(commerceApi).toContain("cancel_activity_registration_participation");
+    expect(cancellationMigration).toContain("UPDATE public.session_registrations");
+    expect(cancellationMigration).toContain("UPDATE public.access_entitlements");
+    expect(cancellationMigration).not.toContain("fulfillment_status");
     expect(webhook).toContain("fulfillment_status: 'not_collected'");
     expect(myPage).toContain('["my-session-registrations", user?.id]');
     expect(myPage).toContain('["commerce-my-orders"]');

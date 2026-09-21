@@ -540,9 +540,59 @@ async function cancelBookingParticipantCapacity(admin: any, participantId: strin
   return Boolean(data);
 }
 
+type ActivityCancellationCommandResult = {
+  registration_status: 'cancelled';
+  financial_state: 'unmanaged' | 'not_applicable' | 'refund_requested' | 'paid_not_refunded';
+  available_count: number | null;
+};
+
+async function cancelActivityRegistrationParticipation(admin: ServiceClient, input: {
+  registrationId: string;
+  orderId?: string | null;
+  actorUserId: string;
+  source: 'staff';
+  reason: string;
+  requestId: string;
+}) {
+  const { data, error } = await admin.rpc('cancel_activity_registration_participation', {
+    p_registration_id: input.registrationId,
+    p_order_id: input.orderId || null,
+    p_actor_user_id: input.actorUserId,
+    p_source: input.source,
+    p_reason: input.reason,
+    p_request_id: input.requestId,
+    p_refund_id: null,
+    p_requested_at: new Date().toISOString(),
+  }).maybeSingle();
+  if (error) throw new Error(error.message);
+  const result = data as ActivityCancellationCommandResult | null;
+  if (!result || result.registration_status !== 'cancelled') {
+    throw new Error('Activity participation cancellation did not complete');
+  }
+  return result;
+}
+
 function minorToSek(minor: number) {
   return Math.round(Number(minor || 0)) / 100;
 }
+
+type ActivityCommerceLineProjection = {
+  session_registration_id: string;
+  commerce_order_id: string;
+};
+
+type ActivityCommerceOrderProjection = {
+  id: string;
+  status: string;
+  booking_receipt_id: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+type ActivityReceiptProjection = {
+  id: string;
+  receipt_number: string | null;
+  payment_status: string | null;
+};
 
 function includedActivityRegistrationSource(
   pricing: ActivityPricingDecision,
@@ -1196,7 +1246,41 @@ async function projectActivityInvitationForStaff(admin: ServiceClient, invitatio
     activityInvitationTruth(admin, invitation),
     activityInvitationContact(admin, invitation),
   ]);
-  const secondary = state.operational_state === 'confirmed_paid'
+  const { data: commerceLine, error: commerceLineError } = registration?.id
+    ? await admin.from('commerce_order_lines')
+      .select('commerce_order_id')
+      .eq('session_registration_id', registration.id)
+      .eq('commerce_kind', 'participation')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null, error: null };
+  if (commerceLineError) throw new Error(commerceLineError.message);
+  const { data: commerceOrder, error: commerceOrderError } = commerceLine?.commerce_order_id
+    ? await admin.from('commerce_orders')
+      .select('id, booking_receipt_id, metadata')
+      .eq('id', commerceLine.commerce_order_id)
+      .maybeSingle()
+    : { data: null, error: null };
+  if (commerceOrderError) throw new Error(commerceOrderError.message);
+  const { data: receipt, error: receiptError } = commerceOrder?.booking_receipt_id
+    ? await admin.from('booking_receipts')
+      .select('receipt_number, payment_status')
+      .eq('id', commerceOrder.booking_receipt_id)
+      .maybeSingle()
+    : { data: null, error: null };
+  if (receiptError) throw new Error(receiptError.message);
+  const cancelled = state.operational_state === 'cancelled';
+  const paid = Number(registration?.price_paid_sek || 0) > 0 || state.operational_state === 'confirmed_paid';
+  const refunded = receipt?.payment_status === 'refunded';
+  const refundPending = Boolean(commerceOrder?.metadata?.cancellation_requested_at) && !refunded;
+  const secondary = cancelled && paid
+    ? refunded
+      ? 'AVBOKAD · ÅTERBETALD'
+      : refundPending
+      ? 'AVBOKAD · ÅTERBETALNING PÅGÅR'
+      : 'AVBOKAD · BETALD · EJ ÅTERBETALD'
+    : state.operational_state === 'confirmed_paid'
     ? 'BETALD'
     : state.operational_state === 'confirmed_included'
     ? `INGÅR${invitation.access_reason ? ` · ${invitation.access_reason}` : invitation.entitlement_type ? ` · ${invitation.entitlement_type}` : ''}`
@@ -1225,8 +1309,8 @@ async function projectActivityInvitationForStaff(admin: ServiceClient, invitatio
     checked_in_at: checkin?.checked_in_at || null,
     session_registration_id: registration?.id || invitation.registration_id || null,
     registration_id: registration?.id || invitation.registration_id || null,
-    payment_status: state.operational_state === 'confirmed_paid'
-      ? 'paid'
+    payment_status: paid
+      ? refunded ? 'refunded' : 'paid'
       : state.operational_state === 'confirmed_included'
       ? 'free'
       : 'pending',
@@ -1237,6 +1321,9 @@ async function projectActivityInvitationForStaff(admin: ServiceClient, invitatio
     reserved: state.reserved,
     can_resend: state.can_resend && Boolean(invitation.stripe_session_id && invitation.checkout_url),
     can_retry: state.can_retry,
+    receipt_number: receipt?.receipt_number || null,
+    receipt_payment_status: receipt?.payment_status || null,
+    financial_state: paid ? (refunded ? 'refunded' : refundPending ? 'refund_pending' : 'paid') : 'not_applicable',
     canonical_price_minor: Number(invitation.canonical_price_minor || 0),
     amount_sek: minorToSek(invitation.canonical_price_minor),
     pricing_reason: invitation.pricing_reason || null,
@@ -4437,7 +4524,6 @@ Deno.serve(async (req) => {
           .eq('venue_id', venueId)
           .eq('activity_session_id', activitySessionId)
           .eq('session_date', sessionDate)
-          .neq('status', 'cancelled')
           .order('registered_at'),
         admin.rpc('capacity_fill', {
           p_venue_id: venueId,
@@ -4480,11 +4566,68 @@ Deno.serve(async (req) => {
       for (const row of (checkinRows || []) as ActivityParticipantCheckinRow[]) {
         if (!checkinByRegistrationId.has(row.entitlement_id)) checkinByRegistrationId.set(row.entitlement_id, row);
       }
+      const { data: commerceLineRows, error: commerceLineError } = registrationIds.length
+        ? await admin.from('commerce_order_lines')
+          .select('session_registration_id, commerce_order_id')
+          .in('session_registration_id', registrationIds)
+          .eq('commerce_kind', 'participation')
+        : { data: [], error: null };
+      if (commerceLineError) return errorResponse(commerceLineError.message, 500);
+      const commerceLineByRegistrationId = new Map<string, ActivityCommerceLineProjection>();
+      for (const row of (commerceLineRows || []) as ActivityCommerceLineProjection[]) {
+        if (!commerceLineByRegistrationId.has(row.session_registration_id)) {
+          commerceLineByRegistrationId.set(row.session_registration_id, row);
+        }
+      }
+      const commerceOrderIds = Array.from(new Set(
+        ((commerceLineRows || []) as ActivityCommerceLineProjection[]).map((row) => row.commerce_order_id).filter(Boolean),
+      ));
+      const { data: commerceOrderRows, error: commerceOrderError } = commerceOrderIds.length
+        ? await admin.from('commerce_orders')
+          .select('id, status, booking_receipt_id, metadata')
+          .in('id', commerceOrderIds)
+        : { data: [], error: null };
+      if (commerceOrderError) return errorResponse(commerceOrderError.message, 500);
+      const commerceOrderById = new Map<string, ActivityCommerceOrderProjection>(
+        ((commerceOrderRows || []) as ActivityCommerceOrderProjection[]).map((row) => [row.id, row]),
+      );
+      const receiptIds = Array.from(new Set(
+        ((commerceOrderRows || []) as ActivityCommerceOrderProjection[])
+          .map((row) => row.booking_receipt_id)
+          .filter((receiptId): receiptId is string => Boolean(receiptId)),
+      ));
+      const { data: receiptRows, error: receiptError } = receiptIds.length
+        ? await admin.from('booking_receipts')
+          .select('id, receipt_number, payment_status')
+          .in('id', receiptIds)
+        : { data: [], error: null };
+      if (receiptError) return errorResponse(receiptError.message, 500);
+      const receiptById = new Map<string, ActivityReceiptProjection>(
+        ((receiptRows || []) as ActivityReceiptProjection[]).map((row) => [row.id, row]),
+      );
       const projectedRegistrations = otherRegistrations.map((registration) => {
         const customer = registration.customer_id ? customerById.get(registration.customer_id) : null;
         const checkin = checkinByRegistrationId.get(registration.id);
         const accessReason = String(registration.metadata?.access_reason || registration.metadata?.pricing_reason || '').trim();
         const paid = Number(registration.price_paid_sek || 0) > 0;
+        const cancelled = registration.status === 'cancelled';
+        const commerceLine = commerceLineByRegistrationId.get(registration.id);
+        const commerceOrder = commerceLine?.commerce_order_id ? commerceOrderById.get(commerceLine.commerce_order_id) : null;
+        const receipt = commerceOrder?.booking_receipt_id ? receiptById.get(commerceOrder.booking_receipt_id) : null;
+        const refunded = receipt?.payment_status === 'refunded';
+        const refundPending = Boolean(commerceOrder?.metadata?.cancellation_requested_at) && !refunded;
+        const paymentStatus = paid ? (refunded ? 'refunded' : 'paid') : 'free';
+        const secondaryLabel = cancelled
+          ? paid
+            ? refunded
+              ? 'AVBOKAD · ÅTERBETALD'
+              : refundPending
+              ? 'AVBOKAD · ÅTERBETALNING PÅGÅR'
+              : 'AVBOKAD · BETALD · EJ ÅTERBETALD'
+            : 'AVBOKAD · INGICK'
+          : paid
+          ? 'BETALD'
+          : `INGÅR${accessReason ? ` · ${accessReason}` : ''}`;
         return {
           id: registration.id,
           venue_id: registration.venue_id,
@@ -4500,16 +4643,21 @@ Deno.serve(async (req) => {
           checked_in_at: checkin?.checked_in_at || null,
           session_registration_id: registration.id,
           registration_id: registration.id,
-          payment_status: paid ? 'paid' : 'free',
-          operational_state: paid ? 'confirmed_paid' : 'confirmed_included',
-          headline: 'HAR PLATS',
-          secondary_label: paid ? 'BETALD' : `INGÅR${accessReason ? ` · ${accessReason}` : ''}`,
-          has_place: true,
+          payment_status: paymentStatus,
+          operational_state: cancelled ? 'cancelled' : paid ? 'confirmed_paid' : 'confirmed_included',
+          headline: cancelled ? 'AVBOKAD' : 'HAR PLATS',
+          secondary_label: secondaryLabel,
+          has_place: !cancelled,
           reserved: false,
           can_resend: false,
           can_retry: false,
           canonical_price_minor: Math.round(Number(registration.price_paid_sek || 0) * 100),
           amount_sek: Number(registration.price_paid_sek || 0),
+          receipt_number: receipt?.receipt_number || null,
+          receipt_payment_status: receipt?.payment_status || null,
+          financial_state: paid ? (refunded ? 'refunded' : refundPending ? 'refund_pending' : 'paid') : 'not_applicable',
+          cancelled_at: registration.metadata?.participation_cancelled_at || null,
+          cancellation_source: registration.metadata?.participation_cancellation_source || null,
           access_reason: accessReason || null,
           metadata: registration.metadata || {},
         };
@@ -4543,6 +4691,60 @@ Deno.serve(async (req) => {
           courts: occurrenceCourtIds.map((courtId) => occurrenceCourtById.get(courtId)).filter(Boolean),
         },
         participants: [...projectedRegistrations, ...projectedInvites],
+      }, 200, 0);
+    }
+
+    // POST /api-bookings/activity-participant-cancel — staff releases the
+    // participant place now. Any payment/refund remains an explicit, separate
+    // financial operation and is reported back to the operator.
+    if (req.method === 'POST' && path === 'activity-participant-cancel') {
+      const body = await req.json();
+      const venueId = String(body.venueId || body.venue_id || '').trim();
+      const activitySessionId = String(body.activitySessionId || body.activity_session_id || '').trim();
+      const sessionDate = String(body.sessionDate || body.session_date || '').slice(0, 10);
+      const registrationId = String(body.registrationId || body.registration_id || '').trim();
+      const reason = String(body.reason || 'staff_activity_participant_cancellation').trim().slice(0, 500);
+      if (!venueId || !UUID_PATTERN.test(activitySessionId) || !UUID_PATTERN.test(registrationId)
+        || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
+        return errorResponse('Invalid activity occurrence participant', 400);
+      }
+      const admin = getServiceClient();
+      if (!await canOperateVenue(admin, userId, venueId)) return errorResponse('Forbidden', 403);
+      const activity = await loadEffectiveActivityOccurrence(admin, venueId, activitySessionId, sessionDate);
+      if (!activity) return errorResponse('Activity occurrence not found', 404);
+      const { data: registration, error: registrationError } = await admin.from('session_registrations')
+        .select('id, status')
+        .eq('id', registrationId)
+        .eq('venue_id', venueId)
+        .eq('activity_session_id', activitySessionId)
+        .eq('session_date', sessionDate)
+        .maybeSingle();
+      if (registrationError) return errorResponse(registrationError.message, 500);
+      if (!registration) return errorResponse('Activity participant not found', 404);
+      const { data: commerceLine, error: commerceLineError } = await admin.from('commerce_order_lines')
+        .select('commerce_order_id')
+        .eq('session_registration_id', registrationId)
+        .eq('commerce_kind', 'participation')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (commerceLineError) return errorResponse(commerceLineError.message, 500);
+      const result = await cancelActivityRegistrationParticipation(admin, {
+        registrationId,
+        orderId: commerceLine?.commerce_order_id || null,
+        actorUserId: userId,
+        source: 'staff',
+        reason,
+        requestId: req.headers.get('x-request-id') || crypto.randomUUID(),
+      });
+      return jsonResponse({
+        ok: true,
+        already_cancelled: registration.status === 'cancelled',
+        participation_status: result.registration_status,
+        has_place: false,
+        financial_state: result.financial_state,
+        payment_action_required: result.financial_state === 'paid_not_refunded',
+        available_count: result.available_count,
       }, 200, 0);
     }
 
