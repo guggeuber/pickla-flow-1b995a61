@@ -30,6 +30,11 @@ type PersistedProps = {
   onChanged: () => Promise<void>;
 };
 
+type ProductMediaPayload = {
+  media: ProductMedia[];
+  image_url: string | null;
+};
+
 const THUMBNAIL_BUTTON = "grid h-9 w-9 place-items-center rounded-lg border border-white/10 bg-black/35 text-white disabled:opacity-35";
 
 function validateFiles(files: File[], currentCount: number) {
@@ -120,14 +125,23 @@ export async function uploadPendingProductMedia(venueId: string, productId: stri
 }
 
 export function ProductMediaEditor({ venueId, productId, productName, media, onChanged }: PersistedProps) {
-  const ordered = [...media].sort((left, right) => left.sort_order - right.sort_order || left.id.localeCompare(right.id));
+  const [localMedia, setLocalMedia] = useState(media);
+  useEffect(() => setLocalMedia(media), [media]);
+  const ordered = [...localMedia].sort((left, right) => left.sort_order - right.sort_order || left.id.localeCompare(right.id));
   const [busy, setBusy] = useState(false);
   const [altDrafts, setAltDrafts] = useState<Record<string, string>>({});
   const coverId = ordered.find((item) => item.is_cover)?.id || ordered[0]?.id;
 
   const run = async (work: () => Promise<unknown>, success: string) => {
     setBusy(true);
-    try { await work(); await onChanged(); toast.success(success); }
+    try {
+      const result = await work();
+      if (result && typeof result === "object" && "media" in result && Array.isArray((result as ProductMediaPayload).media)) {
+        setLocalMedia((result as ProductMediaPayload).media);
+      }
+      await onChanged();
+      toast.success(success);
+    }
     catch (error) { toast.error(error instanceof Error ? error.message : "Bilden kunde inte uppdateras"); }
     finally { setBusy(false); }
   };

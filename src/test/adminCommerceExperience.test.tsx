@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AdminProducts from "@/components/admin/AdminProducts";
+import { ProductMediaEditor } from "@/components/admin/commerce/ProductMediaEditor";
 import { buildVariantMatrix, productInventoryState, skuBaseFromName } from "@/lib/adminCommerce";
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), postForm: vi.fn(), patch: vi.fn(), remove: vi.fn() }));
@@ -108,6 +109,22 @@ describe("Admin OS Commerce experience", () => {
     const form = api.postForm.mock.calls[0][2] as FormData;
     expect(form.getAll("files").map((value) => (value as File).name)).toEqual(["tee-detail.webp", "tee-front.png", "tee-back.png"]);
     expect(form.get("productId")).toBe(savedProduct.id);
+  });
+
+  it("removes an archived media thumbnail immediately from the server response", async () => {
+    const media = [
+      { id: "media-1", product_id: savedProduct.id, venue_id: venueId, url: "https://example.com/front.jpg", public_url: "https://example.com/front.jpg", storage_bucket: "product-media", storage_path: "front.jpg", alt_text: "Front", sort_order: 0, is_cover: true, status: "active" as const, created_at: "2026-09-21T00:00:00Z", updated_at: "2026-09-21T00:00:00Z" },
+      { id: "media-2", product_id: savedProduct.id, venue_id: venueId, url: "https://example.com/back.jpg", public_url: "https://example.com/back.jpg", storage_bucket: "product-media", storage_path: "back.jpg", alt_text: "Back", sort_order: 1, is_cover: false, status: "active" as const, created_at: "2026-09-21T00:00:00Z", updated_at: "2026-09-21T00:00:00Z" },
+    ];
+    api.patch.mockResolvedValue({ media: [media[1]], image_url: media[1].public_url });
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+
+    render(<ProductMediaEditor venueId={venueId} productId={savedProduct.id} productName={savedProduct.name} media={media} onChanged={onChanged} />);
+    fireEvent.click(screen.getByRole("button", { name: "Ta bort bild 1" }));
+
+    await waitFor(() => expect(screen.queryByAltText("Front")).not.toBeInTheDocument());
+    expect(screen.getByAltText("Back")).toBeInTheDocument();
+    expect(api.patch).toHaveBeenCalledWith("api-admin", "product-media", expect.objectContaining({ action: "archive", media_id: "media-1" }));
   });
 
   it("generates the eight canonical Tee combinations with unique editable SKU suggestions", () => {
