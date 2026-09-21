@@ -64,7 +64,12 @@ describe("CommerceShopPage", () => {
             activity_addon_enabled: false,
             category: null,
             sport: null,
-            image_url: null,
+            image_url: "https://images.test/bag-cover.webp",
+            media: [
+              { id: "media-1", url: "https://images.test/bag-cover.webp", alt_text: "Väskans framsida", sort_order: 0, is_cover: true },
+              { id: "media-2", url: "https://images.test/bag-back.webp", alt_text: "Väskans baksida", sort_order: 1, is_cover: false },
+              { id: "media-3", url: "https://images.test/bag-detail.webp", alt_text: "Väskans detalj", sort_order: 2, is_cover: false },
+            ],
             store_eligible: true,
           }],
         });
@@ -87,7 +92,14 @@ describe("CommerceShopPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Pink Pickla Bag" })).toBeInTheDocument();
     expect(screen.getByTestId("pickla-top-bar")).toBeInTheDocument();
+    expect(screen.queryByAltText("Väskans baksida")).not.toBeInTheDocument();
     await waitFor(() => expect(api.get).toHaveBeenCalledWith("api-commerce", "catalog", { venueId }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Visa bilder för Pink Pickla Bag" }));
+    expect(screen.getByRole("dialog", { name: "Bilder för Pink Pickla Bag" })).toBeInTheDocument();
+    expect(screen.getByAltText("Väskans baksida")).toHaveAttribute("loading", "lazy");
+    expect(screen.getByAltText("Väskans detalj")).toHaveAttribute("loading", "lazy");
+    fireEvent.click(screen.getByRole("button", { name: "Stäng" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Öka Pink Pickla Bag" }));
     await waitFor(() => expect(cart.queue).toHaveBeenCalledWith({ "product-bag": 1 }));

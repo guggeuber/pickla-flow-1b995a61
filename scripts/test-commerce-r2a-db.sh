@@ -11,3 +11,4 @@ fi
 psql "$db_url" -v ON_ERROR_STOP=1 -f supabase/tests/product_engine_release_1.sql
 psql "$db_url" -v ON_ERROR_STOP=1 -f supabase/tests/commerce_r2a_tracked_merchandise.sql
 psql "$db_url" -v ON_ERROR_STOP=1 -f supabase/tests/commerce_r2a_concurrency.sql
+psql "$db_url" -v ON_ERROR_STOP=1 -f supabase/tests/product_media_v2.sql

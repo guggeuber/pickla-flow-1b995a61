@@ -86,6 +86,15 @@ type CommerceProduct = CommerceProductLike & {
   resolver_rules?: Record<string, unknown> | null;
 };
 
+type CommerceProductMedia = {
+  id: string;
+  product_id: string;
+  public_url: string;
+  alt_text: string | null;
+  sort_order: number;
+  is_cover: boolean;
+};
+
 type RpcVersionRow = {
   version: number;
   total_inc_vat_minor?: number | string | null;
@@ -1852,6 +1861,33 @@ const commerceHandler = async (req: Request) => {
   try {
     const { userId } = await optionalUser(req);
 
+    if (req.method === 'GET' && path === 'product-media') {
+      const mediaId = String(url.searchParams.get('id') || '').trim();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(mediaId)) {
+        return errorResponse('Invalid media id', 400);
+      }
+      const { data: media, error: mediaError } = await admin.from('product_media')
+        .select('id, product_id, storage_bucket, storage_path, status')
+        .eq('id', mediaId).eq('status', 'active').maybeSingle();
+      if (mediaError) throw new Error(mediaError.message);
+      if (!media || media.storage_bucket !== 'product-media') return errorResponse('Product image not found', 404);
+      const { data: product, error: productError } = await admin.from('access_products')
+        .select('id').eq('id', media.product_id).eq('status', 'active').eq('is_active', true).maybeSingle();
+      if (productError) throw new Error(productError.message);
+      if (!product) return errorResponse('Product image not found', 404);
+      const { data: image, error: imageError } = await admin.storage.from(media.storage_bucket).download(media.storage_path);
+      if (imageError || !image) return errorResponse('Product image unavailable', 404);
+      return new Response(image, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': image.type || 'application/octet-stream',
+          'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
     if (req.method === 'GET' && path === 'catalog') {
       const venueId = url.searchParams.get('venueId') || '';
       if (!venueId) return errorResponse('Missing venueId', 400);
@@ -1895,14 +1931,18 @@ const commerceHandler = async (req: Request) => {
       if (variantError) throw new Error(variantError.message);
       const variantIds = (variants || []).map((variant: any) => String(variant.id));
       const locationIds = (listings || []).map((listing: any) => String(listing.default_inventory_location_id));
-      const [{ data: assignments, error: assignmentError }, { data: optionValues, error: optionValueError }, { data: options, error: optionError }, { data: levels, error: levelError }, { data: locations, error: locationError }] = await Promise.all([
+      const [{ data: assignments, error: assignmentError }, { data: optionValues, error: optionValueError }, { data: options, error: optionError }, { data: levels, error: levelError }, { data: locations, error: locationError }, { data: media, error: mediaError }] = await Promise.all([
         variantIds.length ? admin.from('product_variant_option_values').select('*').in('variant_id', variantIds) : Promise.resolve({ data: [], error: null }),
         trackedProductIds.length ? admin.from('product_option_values').select('id, option_id, code, label, swatch, sort_order, status').eq('status', 'active') : Promise.resolve({ data: [], error: null }),
         trackedProductIds.length ? admin.from('product_options').select('id, product_id, code, label, sort_order, status').in('product_id', trackedProductIds).eq('status', 'active') : Promise.resolve({ data: [], error: null }),
         variantIds.length && locationIds.length ? admin.from('inventory_levels').select('variant_id, location_id, on_hand, reserved, allocated, incident_blocked').in('variant_id', variantIds).in('location_id', locationIds) : Promise.resolve({ data: [], error: null }),
         locationIds.length ? admin.from('inventory_locations').select('id, venue_id, name, status').in('id', locationIds) : Promise.resolve({ data: [], error: null }),
+        productRows.length ? admin.from('product_media')
+          .select('id, product_id, public_url, alt_text, sort_order, is_cover')
+          .in('product_id', productRows.map((product) => product.id)).eq('status', 'active').order('sort_order').order('id')
+          : Promise.resolve({ data: [], error: null }),
       ]);
-      const catalogDetailError = assignmentError || optionValueError || optionError || levelError || locationError;
+      const catalogDetailError = assignmentError || optionValueError || optionError || levelError || locationError || mediaError;
       if (catalogDetailError) throw new Error(catalogDetailError.message);
       const listingByProduct = new Map((listings || []).map((row: any) => [String(row.product_id), row]));
       const locationById = new Map((locations || []).map((row: any) => [String(row.id), row]));
@@ -1910,6 +1950,12 @@ const commerceHandler = async (req: Request) => {
       const valueById = new Map((optionValues || []).map((row: any) => [String(row.id), row]));
       const levelByKey = new Map((levels || []).map((row: any) => [`${row.variant_id}:${row.location_id}`, row]));
       const assignmentsByVariant = new Map<string, any[]>();
+      const mediaByProduct = new Map<string, CommerceProductMedia[]>();
+      for (const item of (media || []) as CommerceProductMedia[]) {
+        const list = mediaByProduct.get(String(item.product_id)) || [];
+        list.push({ id: item.id, url: item.public_url, alt_text: item.alt_text, sort_order: item.sort_order, is_cover: item.is_cover });
+        mediaByProduct.set(String(item.product_id), list);
+      }
       for (const assignment of assignments || []) {
         const list = assignmentsByVariant.get(String(assignment.variant_id)) || [];
         list.push(assignment);
@@ -1969,6 +2015,7 @@ const commerceHandler = async (req: Request) => {
         return store.eligible || addon.eligible;
       }).map((product) => ({
         ...product,
+        media: mediaByProduct.get(product.id) || [],
         max_quantity: productMaxQuantity(product),
         store_eligible: product.inventory_policy === 'tracked'
           ? Boolean(listingByProduct.get(product.id)?.tracked_sales_enabled) && venue.tracked_merch_sales_enabled === true

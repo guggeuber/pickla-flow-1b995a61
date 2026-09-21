@@ -195,17 +195,29 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
     <div className="space-y-5" data-testid="admin-catalog">
       <div className="relative overflow-hidden rounded-3xl p-5" style={{ background: `linear-gradient(135deg, ${ax("surface")}, ${ax("magenta", 0.12)})`, border: `1px solid ${ax("border")}` }}>
         <div className="absolute inset-0 opacity-30" style={AX_GRID_BG} />
-        <div className="relative flex items-start justify-between gap-4">
+        <div className="relative">
           <div>
             <div className="flex items-center gap-2"><Package className="h-4 w-4" style={{ color: ax("magenta") }} /><p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("magenta") }}>Catalog · Vad säljer vi?</p></div>
-            <h2 className="mt-2 font-display text-2xl font-black" style={{ color: "white" }}>Erbjudanden</h2>
-            <p className="mt-1 max-w-sm text-xs leading-relaxed" style={{ color: ax("muted") }}>Kurser, event, clinics, turneringar och Seriespel med egen identitet. Tillfällena syns i samma Calendar som resten av huset.</p>
+            <h2 className="mt-2 font-display text-2xl font-black" style={{ color: "white" }}>Catalog</h2>
+            <p className="mt-1 max-w-sm text-xs leading-relaxed" style={{ color: ax("muted") }}>Produkter, lager och ordrar först. Kurser, event och andra erbjudanden hanteras separat nedanför.</p>
           </div>
-          <motion.button type="button" whileTap={{ scale: 0.95 }} onClick={() => setChoosingType((value) => !value)} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-black" style={{ background: `linear-gradient(135deg, ${ax("electric")}, ${ax("magenta")})`, color: "white" }}>
-            <Plus className="h-4 w-4" /> Nytt erbjudande
-          </motion.button>
         </div>
       </div>
+
+      <section className="rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }} aria-labelledby="catalog-commerce-heading" data-testid="catalog-commerce-first">
+        <div className="flex items-center gap-2"><p id="catalog-commerce-heading" className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("electricSoft") }}>Commerce</p><span className="h-px flex-1" style={{ background: `linear-gradient(90deg, ${ax("border")}, transparent)` }} /></div>
+        <p className="mt-2 text-xs" style={{ color: ax("muted") }}>Produktkatalog, lagersanning och orderhistorik – direkt, utan att scrolla förbi erbjudanden.</p>
+        <div className="mt-3 grid grid-cols-3 gap-2" aria-label="Commerce">
+          <button type="button" onClick={() => setCommerceSection("products")} className="min-h-20 rounded-xl p-3 text-center" style={{ background: ax("surface"), border: `1px solid ${ax("borderSoft")}` }}><Tag className="mx-auto h-5 w-5" style={{ color: ax("magenta") }} /><span className="mt-2 block text-[11px] font-black" style={{ color: "white" }}>Produkter</span></button>
+          <button type="button" onClick={() => setCommerceSection("inventory")} className="min-h-20 rounded-xl p-3 text-center" style={{ background: ax("surface"), border: `1px solid ${ax("borderSoft")}` }}><Boxes className="mx-auto h-5 w-5" style={{ color: ax("lime") }} /><span className="mt-2 block text-[11px] font-black" style={{ color: "white" }}>Lager</span></button>
+          <button type="button" onClick={() => setCommerceSection("orders")} className="min-h-20 rounded-xl p-3 text-center" style={{ background: ax("surface"), border: `1px solid ${ax("borderSoft")}` }}><Receipt className="mx-auto h-5 w-5" style={{ color: ax("electricSoft") }} /><span className="mt-2 block text-[11px] font-black" style={{ color: "white" }}>Ordrar</span></button>
+        </div>
+      </section>
+
+      <section className="flex items-center justify-between gap-3" aria-labelledby="catalog-offers-heading">
+        <div><p className="font-mono text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: ax("magenta") }}>Offers</p><h2 id="catalog-offers-heading" className="mt-1 font-display text-xl font-black text-white">Kurser, event och serier</h2></div>
+        <motion.button type="button" whileTap={{ scale: 0.95 }} onClick={() => setChoosingType((value) => !value)} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-black" style={{ background: `linear-gradient(135deg, ${ax("electric")}, ${ax("magenta")})`, color: "white" }}><Plus className="h-4 w-4" /> Nytt erbjudande</motion.button>
+      </section>
 
       {query.isLoading ? <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin" style={{ color: ax("muted") }} /></div> : query.isError ? <p className="rounded-2xl p-5 text-center text-sm text-destructive">Catalog kunde inte hämtas.</p> : (
         <>
@@ -232,10 +244,7 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
         </div>
       </section> : null}
 
-      <section className="grid grid-cols-3 gap-2 sm:grid-cols-5" aria-label="Catalogverktyg">
-        <button type="button" onClick={() => setCommerceSection("products")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Tag className="mx-auto h-4 w-4" style={{ color: ax("magenta") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Produkter</span></button>
-        <button type="button" onClick={() => setCommerceSection("inventory")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Boxes className="mx-auto h-4 w-4" style={{ color: ax("lime") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Lager</span></button>
-        <button type="button" onClick={() => setCommerceSection("orders")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Receipt className="mx-auto h-4 w-4" style={{ color: ax("electricSoft") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Ordrar</span></button>
+      <section className="grid grid-cols-2 gap-2" aria-label="Övriga Catalogverktyg">
         <button type="button" onClick={() => onOpenModule("memberships")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Crown className="mx-auto h-4 w-4" style={{ color: ax("sun") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Medlemskap</span></button>
         <button type="button" onClick={() => onOpenModule("schedule")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><CalendarDays className="mx-auto h-4 w-4" style={{ color: ax("electricSoft") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Maskinrum</span></button>
       </section>

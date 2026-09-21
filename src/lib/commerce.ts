@@ -22,6 +22,7 @@ export interface CommerceProduct {
   category: string | null;
   sport: string | null;
   image_url: string | null;
+  media?: CommerceProductMedia[];
   store_eligible?: boolean;
   resolver_rules?: Record<string, unknown> | null;
   max_quantity?: number;
@@ -34,6 +35,14 @@ export interface CommerceProduct {
     pickup_location_name: string | null;
     currency: string;
   } | null;
+}
+
+export interface CommerceProductMedia {
+  id: string;
+  url: string;
+  alt_text: string | null;
+  sort_order: number;
+  is_cover: boolean;
 }
 
 export interface CommerceVariantOption {

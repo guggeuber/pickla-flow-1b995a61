@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AdminProducts from "@/components/admin/AdminProducts";
 import { buildVariantMatrix, productInventoryState, skuBaseFromName } from "@/lib/adminCommerce";
 
-const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), remove: vi.fn() }));
+const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), postForm: vi.fn(), patch: vi.fn(), remove: vi.fn() }));
 
-vi.mock("@/lib/api", () => ({ apiGet: api.get, apiPost: api.post, apiPatch: api.patch, apiDelete: api.remove }));
+vi.mock("@/lib/api", () => ({ apiGet: api.get, apiPost: api.post, apiPostForm: api.postForm, apiPatch: api.patch, apiDelete: api.remove }));
 
 const venueId = "7ff6e5dc-f27a-473b-af4e-2b358340ab81";
 const savedProduct = {
@@ -49,7 +49,9 @@ describe("Admin OS Commerce experience", () => {
 
   beforeEach(() => {
     products = [];
-    api.get.mockReset(); api.post.mockReset(); api.patch.mockReset(); api.remove.mockReset();
+    api.get.mockReset(); api.post.mockReset(); api.postForm.mockReset(); api.patch.mockReset(); api.remove.mockReset();
+    api.postForm.mockResolvedValue({ media: [], image_url: null });
+    vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn((file: File) => `blob:${file.name}`), revokeObjectURL: vi.fn() });
     api.get.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "products") return Promise.resolve(products.map((product) => ({ ...product })));
       if (endpoint === "product-relationships") return Promise.resolve([]);
@@ -77,7 +79,36 @@ describe("Admin OS Commerce experience", () => {
     });
   });
 
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("uses a multi-file picker instead of a raw image URL and uploads the chosen cover order after draft creation", async () => {
+    render(<AdminProducts venueId={venueId} />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole("button", { name: "Ny produkt" }));
+    fireEvent.click(screen.getByRole("button", { name: /Fysisk vara/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    expect(screen.queryByLabelText(/Bildlänk|Image URL/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Namn"), { target: { value: "Pickla Classic Tee TEST" } });
+    fireEvent.change(screen.getByLabelText("Pris SEK"), { target: { value: "299" } });
+    const files = [
+      new File(["one"], "tee-front.png", { type: "image/png" }),
+      new File(["two"], "tee-back.png", { type: "image/png" }),
+      new File(["three"], "tee-detail.webp", { type: "image/webp" }),
+    ];
+    fireEvent.change(screen.getByTestId("product-image-input"), { target: { files } });
+    expect(screen.getByTestId("pending-product-media").querySelectorAll("article")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Välj bild 3 som omslag" }));
+    expect(screen.getByAltText("Pickla Classic Tee TEST 3")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skapa säkert utkast" }));
+
+    await waitFor(() => expect(api.postForm).toHaveBeenCalledTimes(1));
+    const form = api.postForm.mock.calls[0][2] as FormData;
+    expect(form.getAll("files").map((value) => (value as File).name)).toEqual(["tee-detail.webp", "tee-front.png", "tee-back.png"]);
+    expect(form.get("productId")).toBe(savedProduct.id);
+  });
 
   it("generates the eight canonical Tee combinations with unique editable SKU suggestions", () => {
     const matrix = buildVariantMatrix("Pickla Classic Tee", ["Black", "Off-white"], ["S", "M", "L", "XL"]);

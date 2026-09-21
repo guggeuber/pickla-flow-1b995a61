@@ -35,6 +35,8 @@ export default function CommerceShopPage() {
   const cart = useStandaloneShopCart(venueId);
   const products = (catalog.data?.products || []).filter((product) => product.store_eligible === true);
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
+  const [galleryProductId, setGalleryProductId] = useState<string | null>(null);
+  const galleryProduct = products.find((product) => product.id === galleryProductId) || null;
 
   const change = (cartKey: string, delta: number, maximum: number) => {
     const next = {
@@ -74,7 +76,7 @@ export default function CommerceShopPage() {
               const displayPriceMinor = selectedVariant?.price_override_minor ?? product.base_price_sek * 100;
               return (
                 <article key={product.id} className="flex items-center gap-4 py-5">
-                  {selectedVariant?.image_url || product.image_url ? <img src={selectedVariant?.image_url || product.image_url || ""} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" /> : <span className="grid h-16 w-16 shrink-0 place-items-center bg-slate-100"><ShoppingBag className="h-5 w-5" /></span>}
+                  {selectedVariant?.image_url || product.image_url ? <button type="button" onClick={() => setGalleryProductId(product.id)} aria-label={`Visa bilder för ${product.name}`} className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-slate-100"><img src={selectedVariant?.image_url || product.image_url || ""} alt={product.media?.find((item) => item.is_cover)?.alt_text || product.name} className="h-full w-full object-cover" /></button> : <span className="grid h-16 w-16 shrink-0 place-items-center bg-slate-100"><ShoppingBag className="h-5 w-5" /></span>}
                   <div className="min-w-0 flex-1">
                     <h2 className="font-black">{product.name}</h2>
                     <p className="mt-1 text-xs text-slate-500">{product.description || (product.fulfillment_presentation === "desk_pickup" ? COMMERCE_PICKUP_COPY : product.fulfillment_presentation === "digital" ? "Levereras digitalt." : "Tillgång hos Pickla.")}</p>
@@ -108,6 +110,15 @@ export default function CommerceShopPage() {
         )}
         {cart.isError ? <p className="mt-6 text-sm text-slate-600">Varukorgen kunde inte hämtas. Försök igen.</p> : null}
       </main>
+
+      {galleryProduct ? <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 px-4 py-[max(24px,env(safe-area-inset-top))]" role="dialog" aria-modal="true" aria-label={`Bilder för ${galleryProduct.name}`} onClick={() => setGalleryProductId(null)}>
+        <div className="mx-auto max-w-xl overflow-hidden rounded-3xl bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          <div className="flex items-center justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wider text-slate-500">Produktbilder</p><h2 className="text-xl font-black">{galleryProduct.name}</h2></div><button type="button" onClick={() => setGalleryProductId(null)} className="min-h-11 rounded-full border border-black/15 px-4 text-sm font-black">Stäng</button></div>
+          <div className="mt-4 grid gap-3">
+            {(galleryProduct.media?.length ? galleryProduct.media : galleryProduct.image_url ? [{ id: `${galleryProduct.id}-legacy`, url: galleryProduct.image_url, alt_text: galleryProduct.name, sort_order: 0, is_cover: true }] : []).map((item, index) => <figure key={item.id} className="overflow-hidden rounded-2xl bg-slate-100"><img src={item.url} alt={item.alt_text || galleryProduct.name} loading={index === 0 ? "eager" : "lazy"} decoding="async" className="aspect-square w-full object-cover" /></figure>)}
+          </div>
+        </div>
+      </div> : null}
 
       {cart.lineCount > 0 && cart.reference ? (
         <footer className="fixed inset-x-0 bottom-0 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
