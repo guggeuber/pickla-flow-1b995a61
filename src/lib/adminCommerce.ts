@@ -14,6 +14,22 @@ export type InventorySummary = {
   low_stock: boolean;
 };
 
+export type ProductMedia = {
+  id: string;
+  product_id: string;
+  venue_id: string;
+  storage_bucket: "product-media" | "legacy-external";
+  storage_path: string;
+  public_url: string;
+  url: string;
+  alt_text: string | null;
+  sort_order: number;
+  is_cover: boolean;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+};
+
 export type AdminCommerceProduct = {
   id: string;
   product_key: string;
@@ -35,6 +51,7 @@ export type AdminCommerceProduct = {
   category: string | null;
   sport: string | null;
   image_url: string | null;
+  media?: ProductMedia[];
   venue_commerce_enabled?: boolean;
   store_eligible?: boolean;
   activity_addon_eligible?: boolean;

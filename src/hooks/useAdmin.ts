@@ -111,10 +111,12 @@ export type AdminLedgerEntry = {
   stripe_session_id?: string | null;
   receipt_number?: string | null;
   booking_receipt_id?: string | null;
+  commerce_order_id?: string | null;
   receipt?: {
     id: string;
     customer_id?: string | null;
     user_id?: string | null;
+    commerce_order_id?: string | null;
     receipt_number: string;
     customer_name?: string | null;
     customer_email?: string | null;

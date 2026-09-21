@@ -87,7 +87,7 @@ type ApiRequestInput = {
   fn: string;
   endpoint: string;
   params?: Record<string, string>;
-  body?: Record<string, unknown>;
+  body?: Record<string, unknown> | FormData;
   options: ApiRequestOptions;
 };
 
@@ -259,7 +259,7 @@ function requestUrl(
 
 async function publicReadRequest<T>({ method, fn, endpoint, params, body, options }: ApiRequestInput): Promise<T> {
   const startedAt = performance.now();
-  const includeJsonContentType = body !== undefined;
+  const includeJsonContentType = body !== undefined && !(body instanceof FormData);
   const authStartedAt = performance.now();
   const authStateBefore = authConcurrencySnapshot();
   const accessToken = await getRequestAccessToken(options.auth);
@@ -280,7 +280,7 @@ async function publicReadRequest<T>({ method, fn, endpoint, params, body, option
         method,
         headers: buildHeaders(includeJsonContentType, accessToken, clientRequestId, !correlationInQuery),
         signal: options.signal,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }),
       });
     } catch (error) {
       const failureKind = classifyClientFailure(error, options.signal);
@@ -455,7 +455,7 @@ async function publicReadRequest<T>({ method, fn, endpoint, params, body, option
 async function apiRequest<T>({ method, fn, endpoint, params, body, options }: ApiRequestInput): Promise<T> {
   if (options.publicRead) return publicReadRequest<T>({ method, fn, endpoint, params, body, options });
   const startedAt = performance.now();
-  const includeJsonContentType = body !== undefined;
+  const includeJsonContentType = body !== undefined && !(body instanceof FormData);
   const clientRequestId = createClientRequestId();
   const authStateBefore = authConcurrencySnapshot();
   const authStartedAt = performance.now();
@@ -501,7 +501,7 @@ async function apiRequest<T>({ method, fn, endpoint, params, body, options }: Ap
         method,
         headers: buildHeaders(includeJsonContentType, accessToken, clientRequestId, !correlationInQuery),
         signal: options.signal,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }),
       });
     } finally {
       fetchMs += Math.round(performance.now() - fetchStartedAt);
@@ -691,6 +691,15 @@ export function apiPost<T = unknown>(
   fn: string,
   endpoint: string,
   body: Record<string, unknown>,
+  options: ApiRequestOptions = {},
+) {
+  return apiRequest<T>({ method: "POST", fn, endpoint, body, options });
+}
+
+export function apiPostForm<T = unknown>(
+  fn: string,
+  endpoint: string,
+  body: FormData,
   options: ApiRequestOptions = {},
 ) {
   return apiRequest<T>({ method: "POST", fn, endpoint, body, options });

@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Phone, Mail, Calendar, ChevronRight, UserPlus, Edit3, Check, ArrowLeft, Crown, X, UserCheck, Loader2 } from "lucide-react";
+import { Search, Phone, Mail, Calendar, ChevronRight, UserPlus, Edit3, Check, ArrowLeft, Crown, X, UserCheck, Loader2, ReceiptText } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
@@ -7,6 +7,8 @@ import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useVenueForStaff } from "@/hooks/useDesk";
 import { supabase } from "@/integrations/supabase/client";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
+import CommerceOrderDetailDrawer from "@/components/commerce/CommerceOrderDetailDrawer";
+import { fetchStaffCommerceOrders, formatCommerceMoney } from "@/lib/commerce";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 
@@ -31,6 +33,10 @@ type DeskCustomer = PlayerProfile & {
   last_purchase_label?: string | null;
   last_checkin_at?: string | null;
   last_checkin_type?: string | null;
+  identity_state?: "account" | "customer" | "guest";
+  identity_aliases?: string[];
+  order_references?: string[];
+  commerce_order_ids?: string[];
 };
 
 const customerTitle = (customer: Partial<DeskCustomer>) =>
@@ -59,6 +65,9 @@ const customerSearchText = (customer: Partial<DeskCustomer>) =>
     customer.identity_title,
     customer.email,
     customer.phone,
+    ...(customer.identity_aliases || []),
+    ...(customer.order_references || []),
+    ...(customer.commerce_order_ids || []),
   ].filter(Boolean).join(" ").toLowerCase();
 
 const tierFromRating = (rating: number | null): "VIP" | "Play" | "Drop-in" => {
@@ -181,7 +190,8 @@ type CustomersScreenProps = {
 const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}) => {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
+  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null; commerceOrderId?: string | null } | null>(null);
+  const [orderDetailId, setOrderDetailId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
@@ -204,6 +214,11 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
     queryKey: ["player-profiles", venueId, normalizedSearch],
     enabled: !!venueId,
     queryFn: () => apiGet("api-customers", "list", { limit: "100", venueId: venueId!, search: normalizedSearch }),
+  });
+  const orderSearchQ = useQuery({
+    queryKey: ["staff-commerce-orders", venueId, normalizedSearch],
+    enabled: !!venueId && normalizedSearch.length > 0,
+    queryFn: () => fetchStaffCommerceOrders(venueId!, normalizedSearch),
   });
 
   const updateProfile = useMutation({
@@ -570,12 +585,34 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
 
       <div className="relative">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <input type="text" placeholder="Namn, e-post, telefon..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-secondary rounded-xl py-3 pl-10 pr-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <input type="text" placeholder="Namn, e-post, telefon eller ordernummer..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-secondary rounded-xl py-3 pl-10 pr-4 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
       </div>
 
-      {isLoading ? (
+      {normalizedSearch && (orderSearchQ.data?.orders.length || 0) > 0 ? (
+        <section className="space-y-2">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">Orderträffar</p>
+          {orderSearchQ.data!.orders.map((order) => (
+            <button
+              key={order.order_id}
+              type="button"
+              onClick={() => setOrderDetailId(order.order_id)}
+              className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-3 text-left"
+            >
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><ReceiptText className="h-4 w-4" /></div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-bold">{order.order_reference}</p>
+                <p className="truncate text-xs text-muted-foreground">{order.customer_name} · {order.products.map((product) => `${product.product_name} × ${product.quantity}`).join(", ")}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">{order.payment_status} · {formatCommerceMoney(order.total_inc_vat_minor, order.currency)}</p>
+              </div>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+        </section>
+      ) : null}
+
+      {isLoading || (normalizedSearch && orderSearchQ.isLoading) ? (
         <p className="text-sm text-muted-foreground text-center py-8">Laddar kunder...</p>
-      ) : filtered.length === 0 ? (
+      ) : filtered.length === 0 && !(orderSearchQ.data?.orders.length || 0) ? (
         <div className="text-center py-8 space-y-3">
           <p className="text-sm text-muted-foreground">Inga kunder hittades</p>
           <motion.button whileTap={{ scale: 0.95 }} onClick={() => setShowCreateModal(true)} className="inline-flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-semibold">
@@ -603,7 +640,7 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
                 transition={{ delay: i * 0.04 }}
                 className="w-full glass-card rounded-2xl p-3.5 flex items-center gap-3"
               >
-                <button onClick={() => setCustomer360Target({ customerId: profile.customer_id || null, userId: profile.auth_user_id || null })} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+                <button onClick={() => setCustomer360Target({ customerId: profile.customer_id || null, userId: profile.auth_user_id || null, commerceOrderId: profile.commerce_order_ids?.[0] || null })} className="flex items-center gap-3 flex-1 min-w-0 text-left">
                   <div className={`w-10 h-10 rounded-xl ${t.bg} ${t.text} flex items-center justify-center text-sm font-display font-bold flex-shrink-0`}>{initials}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -613,6 +650,9 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
                     {profile.email && (
                       <p className="text-[11px] text-muted-foreground truncate">{profile.email}</p>
                     )}
+                    <p className="mt-0.5 text-[10px] font-semibold text-muted-foreground">
+                      {profile.identity_state === "guest" ? "Gästköp · ingen sammanslagning" : profile.identity_state === "account" ? "Verifierat konto" : "Kund utan konto"}
+                    </p>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                       {profile.phone && (
                         <span className="inline-flex items-center gap-1">
@@ -685,11 +725,26 @@ const CustomersScreen = ({ venueId: venueIdOverride }: CustomersScreenProps = {}
         venueId={venueId}
         customerId={customer360Target?.customerId}
         userId={customer360Target?.userId}
+        commerceOrderId={customer360Target?.commerceOrderId}
         onClose={() => setCustomer360Target(null)}
+        onOpenOrder={(orderId) => {
+          setCustomer360Target(null);
+          setOrderDetailId(orderId);
+        }}
         onManageProfile={selected360Profile ? () => {
           setSelectedId(selected360Profile.customer_id || selected360Profile.id);
           setCustomer360Target(null);
         } : undefined}
+      />
+      <CommerceOrderDetailDrawer
+        open={!!orderDetailId}
+        venueId={venueId}
+        orderId={orderDetailId}
+        onClose={() => setOrderDetailId(null)}
+        onOpenCustomer={(target) => {
+          setOrderDetailId(null);
+          setCustomer360Target(target);
+        }}
       />
     </div>
   );

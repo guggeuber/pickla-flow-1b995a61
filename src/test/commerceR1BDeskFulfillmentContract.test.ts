@@ -83,27 +83,29 @@ function fulfillmentRequestLengths(orderCount: number) {
 
 describe("Commerce R1B Desk fulfillment contract", () => {
   it("uses explicit database projections and one strict response serializer", () => {
-    const loader = sourceBetween(commerceApi, "async function loadDeskFulfillmentItems", "const commerceHandler");
+    const loader = sourceBetween(commerceApi, "async function loadDeskFulfillmentItems", "function staffSearchPattern");
     const serializer = sourceBetween(commerceApi, "function serializeDeskFulfillmentItem", "async function loadDeskFulfillmentItems");
 
     expect(loader).not.toContain("select('*')");
-    expect(loader).toContain("commerce_orders!inner(id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))");
-    expect(loader).toContain("select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id,");
-    expect(loader).toContain("select('id, display_name, first_name, last_name')");
+    expect(loader).toContain("commerce_orders!inner(id, customer_id, user_id, guest_name, guest_email, status, created_at, paid_at, booking_receipts!commerce_orders_booking_receipt_id_fkey(id, receipt_number, payment_status, payment_method), commerce_refunds(status, commerce_refund_lines(commerce_order_line_id, quantity)))");
+    expect(loader).toContain("select('id, commerce_order_id, product_name, quantity, unit_price_minor, source_type, fulfillment_status, fulfilled_at, activity_session_id,");
+    expect(loader).toContain("select('id, auth_user_id, display_name, first_name, last_name, primary_email')");
     expect(loader).toContain("select('id, name')");
 
     for (const field of [
-      "line_id", "order_reference", "customer_name", "activity_title", "product_name",
-      "quantity", "order_status", "fulfillment_status", "fulfilled_at",
-      "pickup_instruction", "pickup_eligible",
+      "line_id", "order_id", "order_reference", "receipt_number", "customer_id", "user_id",
+      "customer_name", "customer_email", "identity_state", "activity_title", "source_type", "product_name",
+      "quantity", "unit_price_minor", "order_status", "payment_status", "refund_status",
+      "fulfillment_status", "fulfilled_at", "collected_quantity", "remaining_quantity",
+      "pickup_instruction", "pickup_eligible", "pickup_block_reason",
     ]) {
       expect(serializer).toContain(`${field}:`);
     }
-    expect(serializer).not.toMatch(/paid_at|booking_receipt_id|stripe|payment|resolver_snapshot|metadata|beneficiary|storage_path/);
+    expect(serializer).not.toMatch(/booking_receipt_id|stripe|resolver_snapshot|metadata|beneficiary|storage_path|token_hash/);
   });
 
   it("keeps Desk reads set-based, venue-scoped and independent of historical order count", () => {
-    const loader = sourceBetween(commerceApi, "async function loadDeskFulfillmentItems", "const commerceHandler");
+    const loader = sourceBetween(commerceApi, "async function loadDeskFulfillmentItems", "function staffSearchPattern");
 
     expect(loader).toContain(".from('commerce_order_lines')");
     expect(loader).toContain("commerce_orders!inner(");

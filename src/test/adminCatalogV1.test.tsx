@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminCatalog from "@/components/admin/shell/AdminCatalog";
 import { catalogOfferHiddenReason, catalogOfferSection } from "@/lib/adminCatalog";
@@ -176,6 +176,16 @@ describe("Admin OS Catalog V1", () => {
     renderCatalog();
     fireEvent.click(await screen.findByRole("button", { name: "Produkter" }));
     expect(screen.getByTestId("admin-commerce-workspace")).toHaveTextContent("commerce:products");
+  });
+
+  it("keeps Commerce ahead of the long Offers list on mobile-first Catalog", async () => {
+    renderCatalog();
+    const commerce = await screen.findByTestId("catalog-commerce-first");
+    const firstOffer = await screen.findByTestId("catalog-offer-pickla-series");
+    expect(commerce.compareDocumentPosition(firstOffer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(commerce).getByRole("button", { name: "Produkter" })).toBeInTheDocument();
+    expect(within(commerce).getByRole("button", { name: "Lager" })).toBeInTheDocument();
+    expect(within(commerce).getByRole("button", { name: "Ordrar" })).toBeInTheDocument();
   });
 
   it("classifies lifecycle state without using presentation type as behavior", () => {

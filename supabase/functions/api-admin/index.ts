@@ -61,6 +61,29 @@ const ZETTLE_SCOPES = ['READ:PURCHASE'];
 
 const NON_AUDITED_ADMIN_POSTS = new Set(['venue-operation-impact', 'stripe-invoice-maintenance', 'zettle-backfill', 'venue-commerce']);
 const FINANCIAL_MAINTENANCE_TOKEN_TTL_MS = 10 * 60 * 1000;
+const PRODUCT_MEDIA_BUCKET = 'product-media';
+const PRODUCT_MEDIA_MAX_FILES = 10;
+const PRODUCT_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
+const PRODUCT_MEDIA_TYPES = new Map([
+  ['image/jpeg', 'jpg'],
+  ['image/png', 'png'],
+  ['image/webp', 'webp'],
+  ['image/avif', 'avif'],
+]);
+type ProductMediaRow = {
+  id: string;
+  product_id: string;
+  venue_id: string;
+  storage_bucket: string;
+  storage_path: string;
+  public_url: string;
+  alt_text: string | null;
+  sort_order: number;
+  is_cover: boolean;
+  status: 'active' | 'archived';
+  created_at: string;
+  updated_at: string;
+};
 const SENSITIVE_AUDIT_KEYS = new Set([
   'access_token',
   'refresh_token',
@@ -84,6 +107,7 @@ function adminEntityTableForPath(path: string) {
     hours: 'opening_hours',
     pricing: 'pricing_rules',
     products: 'access_products',
+    'product-media': 'product_media',
     'tracked-product-setup': 'product_venue_listings',
     'product-variants': 'product_variants',
     'tracked-sales': 'product_venue_listings',
@@ -114,6 +138,7 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'hours') return body.dayOfWeek || body.day_of_week || null;
   if (path === 'pricing') return body.ruleId || url.searchParams.get('ruleId');
   if (path === 'products') return body.productId || body.product_key || url.searchParams.get('productId');
+  if (path === 'product-media') return body.media_id || body.product_id || body.productId || null;
   if (path === 'tracked-product-setup') return body.product_id || null;
   if (path === 'product-variants') return body.variant_id || body.product_id || url.searchParams.get('productId');
   if (path === 'tracked-sales') return body.product_id || null;
@@ -3999,7 +4024,7 @@ async function analyzeOperationImpact(
 
 async function decorateAdminProducts(admin: any, venueId: string, products: any[]) {
   const productIds = products.map((product) => product.id);
-  const [{ data: venue, error: venueError }, { data: relationships, error: relationshipsError }, variantResult, listingResult] = await Promise.all([
+  const [{ data: venue, error: venueError }, { data: relationships, error: relationshipsError }, variantResult, listingResult, mediaResult] = await Promise.all([
     admin.from('venues').select('slug, commerce_enabled, tracked_merch_sales_enabled').eq('id', venueId).maybeSingle(),
     admin.from('product_relationships').select('target_product_id').eq('venue_id', venueId).eq('is_active', true),
     productIds.length
@@ -4010,13 +4035,26 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
         .select('id, product_id, status, tracked_sales_enabled, default_inventory_location_id, inventory_locations(name, status)')
         .eq('venue_id', venueId).in('product_id', productIds)
       : Promise.resolve({ data: [], error: null }),
+    productIds.length
+      ? admin.from('product_media')
+        .select('id, product_id, venue_id, storage_bucket, storage_path, public_url, alt_text, sort_order, is_cover, status, created_at, updated_at')
+        .eq('venue_id', venueId).in('product_id', productIds).eq('status', 'active').order('sort_order').order('id')
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (venueError) throw new Error(venueError.message);
   if (relationshipsError) throw new Error(relationshipsError.message);
   if (variantResult.error) throw new Error(variantResult.error.message);
   if (listingResult.error) throw new Error(listingResult.error.message);
+  if (mediaResult.error) throw new Error(mediaResult.error.message);
   const variants = variantResult.data || [];
   const listings = listingResult.data || [];
+  const mediaRows = (mediaResult.data || []) as ProductMediaRow[];
+  const resolvedMedia = await Promise.all(mediaRows.map(async (media) => {
+    if (media.storage_bucket === 'legacy-external') return { ...media, url: media.public_url };
+    const { data, error } = await admin.storage.from(media.storage_bucket).createSignedUrl(media.storage_path, 3600);
+    if (error) throw new Error(error.message);
+    return { ...media, url: data.signedUrl };
+  }));
   const variantIds = variants.map((variant: any) => variant.id);
   const locationIds = listings.map((listing: any) => listing.default_inventory_location_id).filter(Boolean);
   const { data: levels, error: levelError } = variantIds.length && locationIds.length
@@ -4030,6 +4068,8 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
 
   return products.map((product) => {
     const productVariants = variants.filter((variant: any) => variant.product_id === product.id);
+    const productMedia = resolvedMedia.filter((media) => media.product_id === product.id);
+    const coverMedia = productMedia.find((media) => media.is_cover) || productMedia[0] || null;
     const listing = listings.find((candidate: any) => candidate.product_id === product.id) || null;
     const productVariantIds = new Set(productVariants.map((variant: any) => variant.id));
     const productLevels = (levels || []).filter((level: any) => productVariantIds.has(level.variant_id)
@@ -4085,6 +4125,8 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
 
     return {
       ...product,
+      image_url: coverMedia?.url || product.image_url || null,
+      media: productMedia,
       venue_commerce_enabled: venueCommerceEnabled,
       store_eligible: effectiveStoreEligible,
       activity_addon_eligible: addon.eligible,
@@ -4114,6 +4156,15 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
       },
     };
   });
+}
+
+async function adminProductMediaPayload(admin: SupabaseClient, venueId: string, productId: string) {
+  const { data: product, error } = await admin.from('access_products')
+    .select('*').eq('id', productId).eq('venue_id', venueId).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!product) throw new Error('Product not found');
+  const [decorated] = await decorateAdminProducts(admin, venueId, [product]);
+  return { media: decorated.media || [], image_url: decorated.image_url || null };
 }
 
 Deno.serve(async (req) => {
@@ -4330,7 +4381,13 @@ Deno.serve(async (req) => {
     if (!ok) return errorResponse('Forbidden: admin only', 403);
 
     const isWriteMethod = ['POST', 'PATCH', 'DELETE'].includes(req.method);
-    const mutationBody = isWriteMethod ? await req.clone().json().catch(() => ({})) : {};
+    const isMultipartMutation = isWriteMethod && req.headers.get('content-type')?.toLowerCase().includes('multipart/form-data');
+    const mutationBody = !isWriteMethod
+      ? {}
+      : isMultipartMutation
+        ? Object.fromEntries(Array.from((await req.clone().formData()).entries())
+          .filter(([, value]) => typeof value === 'string'))
+        : await req.clone().json().catch(() => ({}));
     const bodyVenueId = mutationBody.venueId || mutationBody.venue_id || null;
     const venueId = url.searchParams.get('venueId') || bodyVenueId || adminVenueId;
     const isVenueScopedWrite = isWriteMethod && !(req.method === 'POST' && path === 'venues');
@@ -4873,7 +4930,7 @@ Deno.serve(async (req) => {
 
       const { data: rows, error: rowsErr } = await admin
         .from('ledger_entries')
-        .select('id, venue_id, customer_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, metadata, created_at')
+        .select('id, venue_id, customer_id, source_type, source_id, accounting_date, occurred_at, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, stripe_session_id, receipt_number, booking_receipt_id, commerce_order_id, metadata, created_at')
         .eq('venue_id', venueId)
         .eq('accounting_date', selectedDate)
         .order('occurred_at', { ascending: false })
@@ -4885,7 +4942,7 @@ Deno.serve(async (req) => {
       if (receiptIds.length) {
         const { data: receipts, error: receiptsErr } = await admin
           .from('booking_receipts')
-          .select('id, customer_id, user_id, receipt_number, customer_name, customer_email, customer_phone, product_description, purchase_type, total_inc_vat_sek, vat_amount_sek, vat_rate, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, issued_at')
+          .select('id, customer_id, user_id, commerce_order_id, receipt_number, customer_name, customer_email, customer_phone, product_description, purchase_type, total_inc_vat_sek, vat_amount_sek, vat_rate, payment_method, payment_status, stripe_session_id, stripe_payment_intent_id, issued_at')
           .eq('venue_id', venueId)
           .in('id', receiptIds);
         if (receiptsErr) throw new Error(receiptsErr.message);
@@ -6534,6 +6591,108 @@ Deno.serve(async (req) => {
       } catch (error) {
         return errorResponse(error instanceof Error ? error.message : 'Could not evaluate product availability');
       }
+    }
+
+    if (req.method === 'POST' && path === 'product-media') {
+      const form = await req.formData();
+      const productId = String(form.get('productId') || form.get('product_id') || '').trim();
+      const files = form.getAll('files').filter((value): value is File => value instanceof File);
+      if (!CAPACITY_UUID.test(productId)) return errorResponse('Invalid productId', 400);
+      if (files.length === 0 || files.length > PRODUCT_MEDIA_MAX_FILES) {
+        return errorResponse(`Upload 1-${PRODUCT_MEDIA_MAX_FILES} images`, 400);
+      }
+      const { data: product, error: productError } = await admin.from('access_products')
+        .select('id, name').eq('id', productId).eq('venue_id', venueId).maybeSingle();
+      if (productError) return errorResponse(productError.message);
+      if (!product) return errorResponse('Product not found', 404);
+      const { count: currentMediaCount, error: mediaCountError } = await admin.from('product_media')
+        .select('id', { count: 'exact', head: true })
+        .eq('product_id', productId).eq('venue_id', venueId).eq('status', 'active');
+      if (mediaCountError) return errorResponse(mediaCountError.message);
+      if (Number(currentMediaCount || 0) + files.length > PRODUCT_MEDIA_MAX_FILES) {
+        return errorResponse(`A product can have at most ${PRODUCT_MEDIA_MAX_FILES} active images`, 409);
+      }
+
+      const uploaded: Array<{ mediaId: string; path: string; inserted: boolean }> = [];
+      try {
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          const extension = PRODUCT_MEDIA_TYPES.get(file.type.toLowerCase());
+          if (!extension) throw new Error('Only JPEG, PNG, WebP and AVIF images are supported');
+          if (file.size <= 0 || file.size > PRODUCT_MEDIA_MAX_BYTES) throw new Error('Each image must be 1 byte to 8 MB');
+          const mediaId = crypto.randomUUID();
+          const storagePath = `${venueId}/${productId}/${mediaId}.${extension}`;
+          const { error: uploadError } = await admin.storage.from(PRODUCT_MEDIA_BUCKET).upload(storagePath, file, {
+            cacheControl: '31536000', contentType: file.type, upsert: false,
+          });
+          if (uploadError) throw new Error(uploadError.message);
+          const item = { mediaId, path: storagePath, inserted: false };
+          uploaded.push(item);
+          const publicUrl = `${supabaseUrl}/functions/v1/api-commerce/product-media?id=${mediaId}`;
+          const { error: insertError } = await admin.rpc('add_product_media', {
+            p_media_id: mediaId,
+            p_venue_id: venueId,
+            p_product_id: productId,
+            p_storage_path: storagePath,
+            p_public_url: publicUrl,
+            p_alt_text: String(form.get(`alt_${index}`) || `${product.name} ${Number(currentMediaCount || 0) + index + 1}`),
+            p_actor_id: userId,
+          });
+          if (insertError) throw new Error(insertError.message);
+          item.inserted = true;
+        }
+        return jsonResponse(await adminProductMediaPayload(admin, venueId, productId), 201);
+      } catch (error) {
+        for (const item of uploaded.filter((candidate) => candidate.inserted).reverse()) {
+          await admin.rpc('archive_product_media', { p_venue_id: venueId, p_product_id: productId, p_media_id: item.mediaId });
+        }
+        const unattachedPaths = uploaded.filter((candidate) => !candidate.inserted).map((candidate) => candidate.path);
+        if (unattachedPaths.length) await admin.storage.from(PRODUCT_MEDIA_BUCKET).remove(unattachedPaths);
+        return errorResponse(error instanceof Error ? error.message : 'Product image upload failed', 400);
+      }
+    }
+
+    if (req.method === 'PATCH' && path === 'product-media') {
+      const body = await req.json();
+      const productId = String(body.product_id || body.productId || '').trim();
+      const action = String(body.action || '').trim();
+      if (!CAPACITY_UUID.test(productId)) return errorResponse('Invalid productId', 400);
+      const { data: product, error: productError } = await admin.from('access_products')
+        .select('id').eq('id', productId).eq('venue_id', venueId).maybeSingle();
+      if (productError) return errorResponse(productError.message);
+      if (!product) return errorResponse('Product not found', 404);
+
+      if (action === 'reorder') {
+        const mediaIds = Array.isArray(body.media_ids) ? body.media_ids.map(String) : [];
+        const coverId = String(body.cover_id || '').trim();
+        if (!mediaIds.length || !mediaIds.every((id: string) => CAPACITY_UUID.test(id)) || !CAPACITY_UUID.test(coverId)) {
+          return errorResponse('Invalid media order', 400);
+        }
+        const { error } = await admin.rpc('reorder_product_media', {
+          p_venue_id: venueId, p_product_id: productId, p_media_ids: mediaIds, p_cover_id: coverId,
+        });
+        if (error) return errorResponse(error.message, 409);
+      } else if (action === 'archive') {
+        const mediaId = String(body.media_id || '').trim();
+        if (!CAPACITY_UUID.test(mediaId)) return errorResponse('Invalid media_id', 400);
+        const { error } = await admin.rpc('archive_product_media', {
+          p_venue_id: venueId, p_product_id: productId, p_media_id: mediaId,
+        });
+        if (error) return errorResponse(error.message, 409);
+      } else if (action === 'alt') {
+        const mediaId = String(body.media_id || '').trim();
+        const altText = String(body.alt_text || '').trim().slice(0, 240);
+        if (!CAPACITY_UUID.test(mediaId)) return errorResponse('Invalid media_id', 400);
+        const { data, error } = await admin.from('product_media')
+          .update({ alt_text: altText || null })
+          .eq('id', mediaId).eq('product_id', productId).eq('venue_id', venueId).eq('status', 'active')
+          .select('id').maybeSingle();
+        if (error) return errorResponse(error.message);
+        if (!data) return errorResponse('Product media not found', 404);
+      } else {
+        return errorResponse('Unsupported product media action', 400);
+      }
+      return jsonResponse(await adminProductMediaPayload(admin, venueId, productId));
     }
 
     if (req.method === 'DELETE' && path === 'products') {

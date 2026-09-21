@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, CalendarCheck, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Inbox, Loader2, Mail, PackageCheck, Phone, ReceiptText, Sparkles, Square, UserCheck, UserPlus } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DateTime } from "luxon";
 import { toast } from "sonner";
 import { useTodayBookings } from "@/hooks/useDesk";
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 import { AxCard, AxChip, AxEmpty, AxSectionLabel, AX_TYPE } from "@/components/admin/shell/axPrimitives";
 import { ax } from "@/components/admin/shell/axTheme";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
@@ -22,9 +22,10 @@ import {
 } from "@/lib/deskOps";
 import { shareOrCopy } from "@/lib/share";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
-import type { DeskFulfillmentItem, DeskFulfillmentResponse } from "@/lib/commerce";
+import { collectCommercePickup, formatCommerceMoney, type DeskFulfillmentItem, type DeskFulfillmentResponse } from "@/lib/commerce";
 import DeskBrucePanel from "@/components/desk/shell/DeskBrucePanel";
 import { bookingParticipantStateView, bookingParticipantSummaryLabel } from "@/lib/bookingParticipantState";
+import CommerceOrderDetailDrawer from "@/components/commerce/CommerceOrderDetailDrawer";
 
 interface Props {
   venueId: string | undefined;
@@ -88,6 +89,24 @@ function dateNavLabel(date: string, today: string) {
 function timeLabel(value: string) {
   const dt = DateTime.fromISO(value, { zone: "utc" }).setZone(STOCKHOLM_ZONE);
   return dt.isValid ? dt.toFormat("HH:mm") : "--:--";
+}
+
+function deskDateTimeLabel(value?: string | null) {
+  if (!value) return "–";
+  const dt = DateTime.fromISO(value, { zone: "utc" }).setZone(STOCKHOLM_ZONE).setLocale("sv");
+  return dt.isValid ? dt.toFormat("d MMM HH:mm") : value;
+}
+
+function pickupIdentityLabel(value: DeskFulfillmentItem["identity_state"]) {
+  if (value === "account") return "Konto";
+  if (value === "customer") return "Kund";
+  return "Gästorder";
+}
+
+function pickupSourceLabel(sourceType: string) {
+  if (sourceType === "catalog") return "Butik";
+  if (sourceType === "activity_addon") return "Aktivitetstillägg";
+  return sourceType;
 }
 
 function safeDisplayName(value: unknown) {
@@ -202,7 +221,10 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
   const qc = useQueryClient();
   const today = useMemo(() => todayStockholm(), []);
   const [expandedActivityKey, setExpandedActivityKey] = useState<string | null>(null);
-  const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
+  const [customerTarget, setCustomerTarget] = useState<{ customerId?: string | null; userId?: string | null; commerceOrderId?: string | null } | null>(null);
+  const [orderDetailId, setOrderDetailId] = useState<string | null>(null);
+  const [pickupQuantities, setPickupQuantities] = useState<Record<string, number>>({});
+  const pickupIntentKeys = useRef(new Map<string, string>());
   const [selectedDate, setSelectedDate] = useState(today);
   const selectedOffset = dateDiffFromToday(selectedDate, today);
   const isToday = selectedOffset === 0;
@@ -263,17 +285,34 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
     onError: (error: any) => toast.error(error?.message || "Kunde inte lägga till spelaren"),
   });
   const collectMutation = useMutation({
-    mutationFn: (line: DeskFulfillmentItem) => apiPatch<{ item: DeskFulfillmentItem }>("api-commerce", "fulfillment", { venue_id: venueId, line_id: line.line_id, status: "collected", quantity: 1, idempotency_key: crypto.randomUUID() }),
-    onSuccess: (result, line) => {
-      toast.success(result.item.remaining_quantity > 0 ? "En vara utlämnad · fler återstår" : "Uthämtningen är klar");
+    mutationFn: ({ line, quantity, idempotencyKey }: { line: DeskFulfillmentItem | any; quantity: number; idempotencyKey: string }) => collectCommercePickup({
+      venueId: venueId!,
+      lineId: line.line_id || line.id,
+      quantity,
+      idempotencyKey,
+    }),
+    onSuccess: (result, variables) => {
+      pickupIntentKeys.current.delete(`${variables.line.line_id || variables.line.id}:${variables.quantity}`);
+      toast.success(result.item.remaining_quantity > 0 ? `${variables.quantity} utlämnad${variables.quantity === 1 ? "" : "e"} · ${result.item.remaining_quantity} återstår` : "Uthämtningen är klar");
       qc.setQueryData<DeskFulfillmentResponse>(["commerce-fulfillment", venueId, "pending_pickup", today], (current) => current
-        ? { ...current, items: current.items.flatMap((item) => item.line_id !== line.line_id ? [item] : result.item.remaining_quantity > 0 ? [result.item] : []) }
+        ? { ...current, items: current.items.flatMap((item) => item.line_id !== (variables.line.line_id || variables.line.id) ? [item] : result.item.remaining_quantity > 0 ? [result.item] : []) }
         : current);
       qc.invalidateQueries({ queryKey: ["commerce-fulfillment", venueId] });
       qc.invalidateQueries({ queryKey: ["commerce-my-orders"] });
+      qc.invalidateQueries({ queryKey: ["staff-commerce-order", venueId, result.item.order_id] });
     },
     onError: (error: any) => toast.error(error?.message || "Kunde inte markera uthämtad"),
   });
+  const collectQuantity = (line: DeskFulfillmentItem | any, requestedQuantity: number) => {
+    const lineId = line.line_id || line.id;
+    const remaining = Math.max(0, Number(line.remaining_quantity ?? line.quantity ?? 0));
+    const quantity = Math.min(remaining, Math.max(1, Math.trunc(requestedQuantity)));
+    if (!venueId || !lineId || quantity < 1 || remaining < 1) return;
+    const intent = `${lineId}:${quantity}`;
+    const idempotencyKey = pickupIntentKeys.current.get(intent) || crypto.randomUUID();
+    pickupIntentKeys.current.set(intent, idempotencyKey);
+    collectMutation.mutate({ line, quantity, idempotencyKey });
+  };
 
   const rows = useMemo(() => (bookings as any[] | undefined) || [], [bookings]);
   const courtRows = useMemo(
@@ -474,19 +513,78 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
             <div className="grid gap-2 lg:grid-cols-2">
               {[...(fulfillment?.items || []), ...recentlyCollected].map((line) => {
                 const collected = line.fulfillment_status === "collected";
-                const collecting = collectMutation.isPending && collectMutation.variables?.line_id === line.line_id;
+                const collecting = collectMutation.isPending && (collectMutation.variables?.line.line_id || collectMutation.variables?.line.id) === line.line_id;
+                const selectedQuantity = Math.min(line.remaining_quantity, Math.max(1, pickupQuantities[line.line_id] || 1));
                 return (
-                  <AxCard key={line.line_id} className="flex items-center gap-3 p-3">
-                    <button type="button" role="checkbox" aria-checked={collected} aria-label={`Markera ${line.product_name} som utlämnad`} onClick={() => !collected && line.pickup_eligible && collectMutation.mutate(line)} disabled={collected || collecting || !line.pickup_eligible} className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border disabled:opacity-100" style={{ borderColor: collected ? ax("lime") : ax("borderSoft"), color: collected ? ax("lime") : ax("muted") }}>
-                      {collecting ? <Loader2 className="h-5 w-5 animate-spin" /> : collected ? <Check className="h-5 w-5" /> : <Square className="h-5 w-5" />}
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-black text-white">{line.customer_name || "Kund"}</p>
-                      <p className="truncate text-xs font-bold" style={{ color: ax("electricSoft") }}>{line.product_name}{line.variant_label ? ` · ${line.variant_label}` : ""}{line.sku ? ` · ${line.sku}` : ""}</p>
-                      {!collected && line.pickup_eligible && line.remaining_quantity > 0 ? <p className="truncate text-[11px]" style={{ color: ax("lime") }}>{line.remaining_quantity} kvar att lämna ut · knappen lämnar ut 1</p> : null}
-                      {!collected && !line.pickup_eligible ? <p className="truncate text-[11px]" style={{ color: ax("danger") }}>Blockerad · hantera lagerincidenten innan utlämning</p> : null}
-                      <p className="truncate text-[11px]" style={{ color: ax("muted") }}>{line.activity_title || `Order ${line.order_reference}`} · {line.order_status === "paid" ? "Betald" : "Bekräftad"} · {collected ? "Utlämnad" : "Ej utlämnad"}</p>
+                  <AxCard key={line.line_id} className="space-y-3 p-3">
+                    <div className="flex items-start gap-3">
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border" style={{ borderColor: collected ? ax("lime") : ax("borderSoft"), color: collected ? ax("lime") : ax("muted") }}>
+                        {collecting ? <Loader2 className="h-5 w-5 animate-spin" /> : collected ? <Check className="h-5 w-5" /> : <PackageCheck className="h-5 w-5" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <button
+                            type="button"
+                            onClick={() => setCustomerTarget({ customerId: line.customer_id, userId: line.user_id, commerceOrderId: line.order_id })}
+                            className="truncate text-left text-sm font-black text-white underline decoration-white/25 underline-offset-2 hover:decoration-white"
+                          >
+                            {line.customer_name || "Kund"}
+                          </button>
+                          <AxChip tone="neutral">{pickupIdentityLabel(line.identity_state)}</AxChip>
+                        </div>
+                        {line.customer_email ? <p className="truncate text-[11px]" style={{ color: ax("muted") }}>{line.customer_email}</p> : null}
+                        <p className="mt-1 text-xs font-bold" style={{ color: ax("electricSoft") }}>{line.product_name}{line.variant_label ? ` · ${line.variant_label}` : ""}{line.sku ? ` · SKU ${line.sku}` : ""}</p>
+                        <button type="button" onClick={() => setOrderDetailId(line.order_id)} className="mt-1 text-left text-[11px] font-black underline decoration-white/25 underline-offset-2" style={{ color: ax("electricSoft") }}>
+                          Order {line.order_reference}
+                        </button>
+                      </div>
                     </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-xl border p-2" style={{ borderColor: ax("borderSoft"), background: ax("surfaceHi") }}><p className={AX_TYPE.microSoft} style={{ color: ax("muted") }}>Beställt</p><p className="font-black text-white">{line.quantity}</p></div>
+                      <div className="rounded-xl border p-2" style={{ borderColor: ax("borderSoft"), background: ax("surfaceHi") }}><p className={AX_TYPE.microSoft} style={{ color: ax("muted") }}>Utlämnat</p><p className="font-black text-white">{line.collected_quantity}</p></div>
+                      <div className="rounded-xl border p-2" style={{ borderColor: ax("borderSoft"), background: ax("surfaceHi") }}><p className={AX_TYPE.microSoft} style={{ color: ax("muted") }}>Återstår</p><p className="font-black" style={{ color: line.remaining_quantity > 0 ? ax("lime") : "white" }}>{line.remaining_quantity}</p></div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5 text-[10px] font-bold">
+                      <span className="rounded-full px-2 py-1" style={{ background: ax("lime", 0.15), color: ax("lime") }}>{line.payment_status === "paid" ? "Betald" : line.payment_status}</span>
+                      {line.refund_status ? <span className="rounded-full px-2 py-1" style={{ background: ax("danger", 0.15), color: ax("danger") }}>Återbetalning: {line.refund_status}</span> : null}
+                      <span className="rounded-full px-2 py-1" style={{ background: ax("borderSoft"), color: ax("muted") }}>{formatCommerceMoney(line.unit_price_minor)} / st</span>
+                      <span className="rounded-full px-2 py-1" style={{ background: ax("borderSoft"), color: ax("muted") }}>Order {deskDateTimeLabel(line.created_at)}</span>
+                      {line.paid_at ? <span className="rounded-full px-2 py-1" style={{ background: ax("borderSoft"), color: ax("muted") }}>Betald {deskDateTimeLabel(line.paid_at)}</span> : null}
+                      {line.receipt_number ? <span className="rounded-full px-2 py-1" style={{ background: ax("borderSoft"), color: ax("muted") }}>Kvitto {line.receipt_number}</span> : null}
+                      {line.activity_title ? <span className="rounded-full px-2 py-1" style={{ background: ax("magenta", 0.14), color: ax("magentaSoft") }}>{line.activity_title}{line.session_date ? ` · ${line.session_date}` : ""}</span> : null}
+                      {!line.activity_title && line.source_type ? <span className="rounded-full px-2 py-1" style={{ background: ax("borderSoft"), color: ax("muted") }}>Källa: {pickupSourceLabel(line.source_type)}</span> : null}
+                    </div>
+
+                    {!collected && line.pickup_eligible && line.remaining_quantity > 0 ? (
+                      <div className="rounded-xl border p-3" style={{ borderColor: ax("lime", 0.28), background: ax("lime", 0.08) }}>
+                        <p className="text-sm font-black" style={{ color: ax("lime") }}>{line.remaining_quantity} återstår av {line.quantity}</p>
+                        <div className="mt-2 flex flex-wrap items-end gap-2">
+                          <label className="text-[10px] font-black uppercase tracking-wider" style={{ color: ax("muted") }}>
+                            Antal
+                            <select
+                              value={selectedQuantity}
+                              onChange={(event) => setPickupQuantities((current) => ({ ...current, [line.line_id]: Number(event.target.value) }))}
+                              disabled={collecting}
+                              className="mt-1 block h-10 min-w-20 rounded-xl border border-white/15 bg-[#171d2c] px-3 text-sm font-black text-white"
+                            >
+                              {Array.from({ length: line.remaining_quantity }, (_, index) => index + 1).map((quantity) => <option key={quantity} value={quantity}>{quantity}</option>)}
+                            </select>
+                          </label>
+                          <button type="button" onClick={() => collectQuantity(line, selectedQuantity)} disabled={collecting} className="h-10 rounded-xl px-4 text-xs font-black disabled:opacity-50" style={{ background: ax("lime"), color: ax("ink") }}>
+                            {collecting ? "Lämnar ut…" : `Lämna ut ${selectedQuantity}`}
+                          </button>
+                          {line.remaining_quantity > 1 && selectedQuantity !== line.remaining_quantity ? (
+                            <button type="button" onClick={() => collectQuantity(line, line.remaining_quantity)} disabled={collecting} className="h-10 rounded-xl border px-4 text-xs font-black disabled:opacity-50" style={{ borderColor: ax("lime", 0.45), color: ax("lime") }}>
+                              Lämna ut alla {line.remaining_quantity}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                    {!collected && !line.pickup_eligible ? <p className="rounded-xl border border-red-500/25 bg-red-500/10 p-3 text-xs font-black" style={{ color: ax("danger") }}>{line.pickup_block_reason || "Utlämning är blockerad tills ordern har stämts av."}</p> : null}
+                    {collected ? <p className="text-xs font-black" style={{ color: ax("lime") }}>Fullt utlämnad {deskDateTimeLabel(line.fulfilled_at)}</p> : null}
                   </AxCard>
                 );
               })}
@@ -542,8 +640,8 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
                   checkingId={(activityCheckinMutation.variables as any)?.session_registration_id || (activityCheckinMutation.variables as any)?.registration_id || null}
                   checking={activityCheckinMutation.isPending}
                   onOpenCustomer={(participant) => setCustomerTarget({ customerId: participant.customer_id || null, userId: participant.user_id || null })}
-                  onCollect={(line) => collectMutation.mutate(line)}
-                  collectingId={(collectMutation.variables as any)?.id || null}
+                  onCollect={(line) => collectQuantity(line, 1)}
+                  collectingId={(collectMutation.variables as any)?.line?.id || (collectMutation.variables as any)?.line?.line_id || null}
                   collecting={collectMutation.isPending}
                 />
               ))}
@@ -557,6 +655,21 @@ export default function DeskToday({ venueId, onOpenDetail }: Props) {
         venueId={venueId || null}
         customerId={customerTarget?.customerId || undefined}
         userId={customerTarget?.userId || undefined}
+        commerceOrderId={customerTarget?.commerceOrderId || undefined}
+        onOpenOrder={(orderId) => {
+          setCustomerTarget(null);
+          setOrderDetailId(orderId);
+        }}
+      />
+      <CommerceOrderDetailDrawer
+        open={!!orderDetailId}
+        onClose={() => setOrderDetailId(null)}
+        venueId={venueId || null}
+        orderId={orderDetailId}
+        onOpenCustomer={(target) => {
+          setOrderDetailId(null);
+          setCustomerTarget(target);
+        }}
       />
     </div>
   );

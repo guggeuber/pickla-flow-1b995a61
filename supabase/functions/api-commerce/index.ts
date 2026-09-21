@@ -86,6 +86,15 @@ type CommerceProduct = CommerceProductLike & {
   resolver_rules?: Record<string, unknown> | null;
 };
 
+type CommerceProductMedia = {
+  id: string;
+  product_id: string;
+  public_url: string;
+  alt_text: string | null;
+  sort_order: number;
+  is_cover: boolean;
+};
+
 type RpcVersionRow = {
   version: number;
   total_inc_vat_minor?: number | string | null;
@@ -105,9 +114,30 @@ type RpcTrackedAttemptRow = RpcVersionRow & {
 type DeskFulfillmentOrderRow = {
   id: string;
   customer_id: string | null;
+  user_id: string | null;
   guest_name: string | null;
+  guest_email: string | null;
   status: string;
-  booking_receipts: { receipt_number: string } | Array<{ receipt_number: string }> | null;
+  created_at: string;
+  paid_at: string | null;
+  booking_receipts: {
+    id: string;
+    receipt_number: string;
+    payment_status: string | null;
+    payment_method: string | null;
+  } | Array<{
+    id: string;
+    receipt_number: string;
+    payment_status: string | null;
+    payment_method: string | null;
+  }> | null;
+  commerce_refunds: Array<{
+    status: string;
+    commerce_refund_lines: Array<{
+      commerce_order_line_id: string;
+      quantity: number;
+    }> | null;
+  }> | null;
 };
 
 type DeskFulfillmentLineRow = {
@@ -115,6 +145,8 @@ type DeskFulfillmentLineRow = {
   commerce_order_id: string;
   product_name: string;
   quantity: number;
+  unit_price_minor: number;
+  source_type: string;
   fulfillment_status: string;
   fulfilled_at: string | null;
   activity_session_id: string | null;
@@ -132,9 +164,11 @@ type DeskFulfillmentLineWithOrderRow = DeskFulfillmentLineRow & {
 
 type DeskFulfillmentCustomerRow = {
   id: string;
+  auth_user_id: string | null;
   display_name: string | null;
   first_name: string | null;
   last_name: string | null;
+  primary_email: string | null;
 };
 
 type DeskFulfillmentActivityRow = {
@@ -142,18 +176,41 @@ type DeskFulfillmentActivityRow = {
   name: string;
 };
 
+type DeskFulfillmentRefundFact = {
+  status: string | null;
+  succeeded_quantity: number;
+  blocks_pickup: boolean;
+};
+
 type DeskFulfillmentItem = {
   line_id: string;
+  order_id: string;
   order_reference: string;
+  receipt_id: string | null;
+  receipt_number: string | null;
+  customer_id: string | null;
+  user_id: string | null;
   customer_name: string;
+  customer_email: string | null;
+  identity_state: 'account' | 'customer' | 'guest';
   activity_title: string | null;
+  activity_session_id: string | null;
+  session_date: string | null;
+  source_type: string;
   product_name: string;
   quantity: number;
+  unit_price_minor: number;
   order_status: string;
+  payment_status: string;
+  payment_method: string | null;
+  refund_status: string | null;
   fulfillment_status: string;
   fulfilled_at: string | null;
+  created_at: string;
+  paid_at: string | null;
   pickup_instruction: string;
   pickup_eligible: boolean;
+  pickup_block_reason: string | null;
   sku?: string | null;
   variant_label?: string | null;
   collected_quantity: number;
@@ -1763,32 +1820,66 @@ function deskOrderReference(order: DeskFulfillmentOrderRow) {
   return receipt?.receipt_number || 'Butiksköp';
 }
 
+function deskOrderReceipt(order: DeskFulfillmentOrderRow) {
+  return Array.isArray(order.booking_receipts) ? order.booking_receipts[0] || null : order.booking_receipts;
+}
+
 function serializeDeskFulfillmentItem(
   line: DeskFulfillmentLineRow,
   order: DeskFulfillmentOrderRow,
   customerName: string,
+  customerEmail: string | null,
   activity: DeskFulfillmentActivityRow | null,
+  refund: DeskFulfillmentRefundFact,
 ): DeskFulfillmentItem {
+  const receipt = deskOrderReceipt(order);
+  const collectedQuantity = Number(line.collected_quantity || 0);
+  const remainingQuantity = ['collected', 'not_collected'].includes(line.fulfillment_status)
+    ? 0
+    : Math.max(0, Number(line.quantity || 0) - collectedQuantity - Number(line.cancelled_quantity || 0)
+      - Math.max(0, refund.succeeded_quantity - collectedQuantity));
+  const pickupBlockReason = refund.blocks_pickup || (line.inventory_policy !== 'tracked' && refund.succeeded_quantity > 0)
+    ? 'refund_attention'
+    : order.status === 'attention'
+      ? 'order_attention'
+      : !['pending_pickup', 'attention'].includes(line.fulfillment_status)
+        ? 'fulfillment_closed'
+        : remainingQuantity <= 0
+          ? 'nothing_remaining'
+          : null;
   return {
     line_id: line.id,
+    order_id: order.id,
     order_reference: deskOrderReference(order),
+    receipt_id: receipt?.id || null,
+    receipt_number: receipt?.receipt_number || null,
+    customer_id: order.customer_id,
+    user_id: order.user_id,
     customer_name: customerName,
+    customer_email: customerEmail,
+    identity_state: order.user_id ? 'account' : order.customer_id ? 'customer' : 'guest',
     activity_title: activity?.name || null,
+    activity_session_id: line.activity_session_id,
+    session_date: line.session_date,
+    source_type: line.source_type,
     product_name: line.product_name,
     quantity: line.quantity,
+    unit_price_minor: line.unit_price_minor,
     order_status: order.status,
+    payment_status: receipt?.payment_status || order.status,
+    payment_method: receipt?.payment_method || null,
+    refund_status: refund.status,
     fulfillment_status: line.fulfillment_status,
     fulfilled_at: line.fulfilled_at,
+    created_at: order.created_at,
+    paid_at: order.paid_at,
     pickup_instruction: DESK_PICKUP_INSTRUCTION,
-    pickup_eligible: (line.inventory_policy === 'tracked' ? order.status === 'paid' : ['paid', 'attention'].includes(order.status))
-      && ['pending_pickup', 'attention'].includes(line.fulfillment_status),
+    pickup_eligible: order.status === 'paid' && pickupBlockReason === null,
+    pickup_block_reason: pickupBlockReason,
     sku: line.sku || null,
     variant_label: String(line.variant_snapshot?.title || '') || null,
-    collected_quantity: line.fulfillment_status === 'collected' && line.inventory_policy !== 'tracked'
-      ? Number(line.quantity || 0) : Number(line.collected_quantity || 0),
-    remaining_quantity: ['collected', 'not_collected'].includes(line.fulfillment_status)
-      ? 0
-      : Math.max(0, Number(line.quantity || 0) - Number(line.collected_quantity || 0) - Number(line.cancelled_quantity || 0)),
+    collected_quantity: collectedQuantity,
+    remaining_quantity: remainingQuantity,
   };
 }
 
@@ -1798,7 +1889,7 @@ async function loadDeskFulfillmentItems(
   filter: { status?: string; lineId?: string; serviceDate?: string } = {},
 ): Promise<DeskFulfillmentItem[]> {
   let lineQuery = admin.from('commerce_order_lines')
-    .select('id, commerce_order_id, product_name, quantity, fulfillment_status, fulfilled_at, activity_session_id, session_date, inventory_policy, sku, variant_snapshot, collected_quantity, cancelled_quantity, commerce_orders!inner(id, customer_id, guest_name, status, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
+    .select('id, commerce_order_id, product_name, quantity, unit_price_minor, source_type, fulfillment_status, fulfilled_at, activity_session_id, session_date, inventory_policy, sku, variant_snapshot, collected_quantity, cancelled_quantity, commerce_orders!inner(id, customer_id, user_id, guest_name, guest_email, status, created_at, paid_at, booking_receipts!commerce_orders_booking_receipt_id_fkey(id, receipt_number, payment_status, payment_method), commerce_refunds(status, commerce_refund_lines(commerce_order_line_id, quantity)))')
     .eq('commerce_orders.venue_id', venueId)
     .in('commerce_orders.status', ['paid', 'attention'])
     .eq('fulfillment_type', 'desk_pickup')
@@ -1818,7 +1909,7 @@ async function loadDeskFulfillmentItems(
 
   const customerIds = Array.from(new Set(orders.map((order) => order.customer_id).filter((id): id is string => Boolean(id))));
   const { data: customerData, error: customerError } = customerIds.length
-    ? await admin.from('customers').select('id, display_name, first_name, last_name').in('id', customerIds)
+    ? await admin.from('customers').select('id, auth_user_id, display_name, first_name, last_name, primary_email').in('id', customerIds)
     : { data: [], error: null };
   if (customerError) throw new Error(customerError.message);
   const customerById = new Map(((customerData || []) as DeskFulfillmentCustomerRow[]).map((customer) => [customer.id, customer]));
@@ -1831,6 +1922,26 @@ async function loadDeskFulfillmentItems(
   const activityById = new Map(((activityData || []) as DeskFulfillmentActivityRow[]).map((activity) => [activity.id, activity]));
   const orderById = new Map(orders.map((order) => [order.id, order]));
 
+  const refundByLineId = new Map<string, DeskFulfillmentRefundFact>();
+  for (const order of orders) {
+    for (const refundRow of order.commerce_refunds || []) {
+      const refundLines = Array.isArray(refundRow.commerce_refund_lines) ? refundRow.commerce_refund_lines : [];
+      for (const refundLine of refundLines) {
+        const current = refundByLineId.get(refundLine.commerce_order_line_id) || {
+          status: null,
+          succeeded_quantity: 0,
+          blocks_pickup: false,
+        };
+        if (!current.status || ['preparing', 'pending', 'attention'].includes(String(refundRow.status))) {
+          current.status = String(refundRow.status || '') || null;
+        }
+        if (refundRow.status === 'succeeded') current.succeeded_quantity += Number(refundLine.quantity || 0);
+        if (['preparing', 'pending', 'attention'].includes(String(refundRow.status))) current.blocks_pickup = true;
+        refundByLineId.set(refundLine.commerce_order_line_id, current);
+      }
+    }
+  }
+
   return lines.flatMap((line) => {
     const order = orderById.get(line.commerce_order_id);
     if (!order) return [];
@@ -1838,9 +1949,321 @@ async function loadDeskFulfillmentItems(
     const customerName = order.guest_name || customer?.display_name
       || [customer?.first_name, customer?.last_name].filter(Boolean).join(' ')
       || 'Kund';
+    const customerEmail = order.guest_email || customer?.primary_email || null;
     const activity = line.activity_session_id ? activityById.get(line.activity_session_id) || null : null;
-    return [serializeDeskFulfillmentItem(line, order, customerName, activity)];
+    const refund = refundByLineId.get(line.id) || { status: null, succeeded_quantity: 0, blocks_pickup: false };
+    return [serializeDeskFulfillmentItem(line, order, customerName, customerEmail, activity, refund)];
   });
+}
+
+function staffSearchPattern(value: string) {
+  return `%${value.replace(/[%_,()]/g, ' ').replace(/\s+/g, ' ').trim()}%`;
+}
+
+function canonicalCustomerName(customer: any) {
+  return [customer?.first_name, customer?.last_name].filter(Boolean).join(' ').trim()
+    || String(customer?.display_name || '').trim()
+    || null;
+}
+
+function orderIdentityState(order: any) {
+  return order?.user_id ? 'account' : order?.customer_id ? 'customer' : 'guest';
+}
+
+function latestRefundState(refunds: any[]) {
+  const blocking = refunds.find((refund) => ['preparing', 'pending', 'attention'].includes(String(refund.status)));
+  return blocking?.status || refunds[0]?.status || null;
+}
+
+async function searchStaffCommerceOrders(admin: AdminClient, venueId: string, rawSearch: string) {
+  const search = rawSearch.trim();
+  const pattern = staffSearchPattern(search);
+  const orderSearchSelect = 'id, venue_id, customer_id, user_id, status, currency, subtotal_minor, discount_minor, total_inc_vat_minor, total_ex_vat_minor, vat_amount_minor, booking_receipt_id, guest_name, guest_email, guest_phone, checkout_frozen_at, paid_at, created_at, updated_at';
+  const receiptSelect = 'id, receipt_number, commerce_order_id, customer_id, user_id, customer_name, customer_email, product_description, total_inc_vat_sek, total_inc_vat, payment_status, payment_method, issued_at';
+  let receiptQuery = admin.from('booking_receipts').select(receiptSelect)
+    .eq('venue_id', venueId)
+    .not('commerce_order_id', 'is', null)
+    .order('issued_at', { ascending: false })
+    .limit(100);
+  if (search) {
+    receiptQuery = receiptQuery.or([
+      `receipt_number.ilike.${pattern}`,
+      `customer_name.ilike.${pattern}`,
+      `customer_email.ilike.${pattern}`,
+      `product_description.ilike.${pattern}`,
+    ].join(','));
+  }
+  const { data: matchingReceipts, error: receiptError } = await receiptQuery;
+  if (receiptError) throw new Error(receiptError.message);
+
+  let matchedCustomerIds: string[] = [];
+  let matchedLineOrderIds: string[] = [];
+  if (search) {
+    const [{ data: customerMatches, error: customerError }, { data: lineMatches, error: lineError }] = await Promise.all([
+      admin.from('customers')
+        .select('id')
+        .or([
+          `display_name.ilike.${pattern}`,
+          `first_name.ilike.${pattern}`,
+          `last_name.ilike.${pattern}`,
+          `primary_email.ilike.${pattern}`,
+          `primary_phone.ilike.${pattern}`,
+        ].join(','))
+        .eq('status', 'active')
+        .limit(100),
+      admin.from('commerce_order_lines')
+        .select('commerce_order_id, commerce_orders!inner(venue_id)')
+        .eq('commerce_orders.venue_id', venueId)
+        .or(`sku.ilike.${pattern},product_name.ilike.${pattern}`)
+        .limit(100),
+    ]);
+    if (customerError || lineError) throw new Error(customerError?.message || lineError?.message);
+    matchedCustomerIds = (customerMatches || []).map((row: any) => String(row.id));
+    matchedLineOrderIds = Array.from(new Set((lineMatches || []).map((row: any) => String(row.commerce_order_id))));
+  }
+
+  const receiptOrderIds = (matchingReceipts || []).map((receipt: any) => String(receipt.commerce_order_id)).filter(Boolean);
+  const orderQueries: any[] = [];
+  if (!search) {
+    orderQueries.push(admin.from('commerce_orders').select(orderSearchSelect)
+      .eq('venue_id', venueId).order('created_at', { ascending: false }).limit(50));
+  } else {
+    if (receiptOrderIds.length) {
+      orderQueries.push(admin.from('commerce_orders').select(orderSearchSelect)
+        .eq('venue_id', venueId).in('id', receiptOrderIds).limit(100));
+    }
+    if (matchedCustomerIds.length) {
+      orderQueries.push(admin.from('commerce_orders').select(orderSearchSelect)
+        .eq('venue_id', venueId).in('customer_id', matchedCustomerIds).limit(100));
+    }
+    if (matchedLineOrderIds.length) {
+      orderQueries.push(admin.from('commerce_orders').select(orderSearchSelect)
+        .eq('venue_id', venueId).in('id', matchedLineOrderIds).limit(100));
+    }
+    orderQueries.push(admin.from('commerce_orders').select(orderSearchSelect)
+      .eq('venue_id', venueId)
+      .or(`guest_name.ilike.${pattern},guest_email.ilike.${pattern}`)
+      .limit(100));
+    if (UUID_PATTERN.test(search)) {
+      orderQueries.push(admin.from('commerce_orders').select(orderSearchSelect)
+        .eq('venue_id', venueId).eq('id', search).limit(1));
+    }
+  }
+  const orderResults = await Promise.all(orderQueries);
+  const orderError = orderResults.find((result) => result.error)?.error;
+  if (orderError) throw new Error(orderError.message);
+  const orders = Array.from(new Map(orderResults.flatMap((result) => result.data || [])
+    .map((order: any) => [String(order.id), order])).values()) as any[];
+  orders.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+  const orderIds = orders.map((order) => String(order.id));
+  if (!orderIds.length) return [];
+
+  const [{ data: lines, error: linesError }, { data: receipts, error: receiptsError }, { data: refunds, error: refundsError }] = await Promise.all([
+    admin.from('commerce_order_lines')
+      .select('id, commerce_order_id, product_name, quantity, collected_quantity, cancelled_quantity, fulfillment_status, fulfillment_type, sku, variant_snapshot, activity_session_id, session_date')
+      .in('commerce_order_id', orderIds).order('sort_order'),
+    admin.from('booking_receipts').select(receiptSelect)
+      .in('commerce_order_id', orderIds).order('issued_at', { ascending: false }),
+    admin.from('commerce_refunds')
+      .select('id, commerce_order_id, status, created_at')
+      .in('commerce_order_id', orderIds).order('created_at', { ascending: false }),
+  ]);
+  if (linesError || receiptsError || refundsError) throw new Error(linesError?.message || receiptsError?.message || refundsError?.message);
+
+  const customerIds = Array.from(new Set(orders.map((order) => order.customer_id).filter(Boolean)));
+  const { data: customers, error: customersError } = customerIds.length
+    ? await admin.from('customers').select('id, auth_user_id, display_name, first_name, last_name, primary_email').in('id', customerIds)
+    : { data: [], error: null };
+  if (customersError) throw new Error(customersError.message);
+  const customerById = new Map((customers || []).map((customer: any) => [String(customer.id), customer]));
+  const receiptByOrderId = new Map<string, any>();
+  for (const receipt of receipts || []) if (!receiptByOrderId.has(String(receipt.commerce_order_id))) receiptByOrderId.set(String(receipt.commerce_order_id), receipt);
+  const linesByOrderId = new Map<string, any[]>();
+  for (const line of lines || []) {
+    const list = linesByOrderId.get(String(line.commerce_order_id)) || [];
+    list.push(line);
+    linesByOrderId.set(String(line.commerce_order_id), list);
+  }
+  const refundsByOrderId = new Map<string, any[]>();
+  for (const refund of refunds || []) {
+    const list = refundsByOrderId.get(String(refund.commerce_order_id)) || [];
+    list.push(refund);
+    refundsByOrderId.set(String(refund.commerce_order_id), list);
+  }
+
+  return orders.slice(0, 100).map((order) => {
+    const receipt = receiptByOrderId.get(String(order.id)) || null;
+    const customer = order.customer_id ? customerById.get(String(order.customer_id)) : null;
+    const orderLines = linesByOrderId.get(String(order.id)) || [];
+    const orderRefunds = refundsByOrderId.get(String(order.id)) || [];
+    return {
+      order_id: order.id,
+      order_reference: receipt?.receipt_number || order.id,
+      customer_id: order.customer_id || null,
+      user_id: order.user_id || null,
+      customer_name: order.guest_name || receipt?.customer_name || canonicalCustomerName(customer) || 'Kund utan namn',
+      customer_email: order.guest_email || receipt?.customer_email || customer?.primary_email || null,
+      identity_state: orderIdentityState(order),
+      created_at: order.created_at,
+      paid_at: order.paid_at || null,
+      order_status: order.status,
+      payment_status: receipt?.payment_status || order.status,
+      payment_method: receipt?.payment_method || null,
+      total_inc_vat_minor: Number(order.total_inc_vat_minor || 0),
+      currency: order.currency,
+      refund_status: latestRefundState(orderRefunds),
+      products: orderLines.map((line) => ({
+        line_id: line.id,
+        product_name: line.product_name,
+        quantity: Number(line.quantity || 0),
+        issued_quantity: Number(line.collected_quantity || 0),
+        remaining_quantity: Math.max(0, Number(line.quantity || 0) - Number(line.collected_quantity || 0) - Number(line.cancelled_quantity || 0)),
+        fulfillment_status: line.fulfillment_status,
+        sku: line.sku || null,
+        variant_label: String(line.variant_snapshot?.title || '') || null,
+      })),
+    };
+  });
+}
+
+async function loadStaffCommerceOrder(admin: AdminClient, venueId: string, orderId: string) {
+  const { data: order, error: orderError } = await admin.from('commerce_orders')
+    .select('id, organization_id, venue_id, customer_id, user_id, status, version, currency, subtotal_minor, discount_minor, total_inc_vat_minor, total_ex_vat_minor, vat_amount_minor, booking_receipt_id, ledger_entry_id, guest_name, guest_email, guest_phone, checkout_frozen_at, paid_at, expires_at, created_at, updated_at')
+    .eq('id', orderId).eq('venue_id', venueId).maybeSingle();
+  if (orderError) throw new Error(orderError.message);
+  if (!order) return null;
+
+  const [{ data: lines, error: linesError }, { data: receipts, error: receiptError }, { data: receiptLines, error: receiptLinesError }, { data: ledger, error: ledgerError }, { data: refunds, error: refundsError }] = await Promise.all([
+    admin.from('commerce_order_lines').select('id, commerce_order_id, product_id, product_key, product_name, commerce_kind, quantity, unit_price_minor, discount_minor, line_total_inc_vat_minor, line_total_ex_vat_minor, vat_rate, vat_amount_minor, source_type, source_id, fulfillment_type, fulfillment_status, fulfilled_at, fulfilled_by, activity_session_id, session_date, session_registration_id, product_snapshot, sort_order, created_at, updated_at, inventory_policy, variant_id, sku, pickup_location_id, variant_snapshot, collected_quantity, cancelled_quantity')
+      .eq('commerce_order_id', order.id).order('sort_order'),
+    admin.from('booking_receipts').select('id, receipt_number, commerce_order_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_ex_vat, vat_amount, total_inc_vat_sek, total_ex_vat_sek, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, issued_at, created_at')
+      .eq('commerce_order_id', order.id).order('issued_at', { ascending: false }),
+    admin.from('commerce_receipt_lines').select('id, booking_receipt_id, commerce_order_id, commerce_order_line_id, product_id, product_key, product_name, commerce_kind, quantity, unit_price_minor, discount_minor, total_inc_vat_minor, total_ex_vat_minor, vat_rate, vat_amount_minor, fulfillment_type, sort_order, created_at')
+      .eq('commerce_order_id', order.id).order('sort_order'),
+    admin.from('ledger_entries').select('id, source_type, source_id, accounting_date, occurred_at, customer_id, customer_name, amount_inc_vat_minor, vat_amount_minor, payment_status, payment_method, receipt_number, booking_receipt_id, commerce_order_id, created_at')
+      .eq('commerce_order_id', order.id).order('occurred_at', { ascending: false }),
+    admin.from('commerce_refunds').select('id, commerce_order_id, refund_type, status, amount_inc_vat_minor, vat_amount_minor, unallocated_amount_minor, currency, reason, created_at, updated_at, completed_at, last_error, commerce_refund_lines(id, commerce_order_line_id, quantity, amount_inc_vat_minor, vat_amount_minor, created_at)')
+      .eq('commerce_order_id', order.id).order('created_at', { ascending: false }),
+  ]);
+  const firstError = linesError || receiptError || receiptLinesError || ledgerError || refundsError;
+  if (firstError) throw new Error(firstError.message);
+  const lineRows = lines || [];
+  const lineIds = lineRows.map((line: any) => line.id);
+  const activityIds = Array.from(new Set(lineRows.map((line: any) => line.activity_session_id).filter(Boolean)));
+  const [customerResult, allocationResult, commandResult, auditResult, activityResult] = await Promise.all([
+    order.customer_id
+      ? admin.from('customers').select('id, auth_user_id, display_name, first_name, last_name, primary_email, primary_phone, status, created_at').eq('id', order.customer_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    lineIds.length
+      ? admin.from('inventory_allocations').select('id, commerce_order_id, commerce_order_line_id, quantity, collected_quantity, cancelled_quantity, status, created_at, updated_at').in('commerce_order_line_id', lineIds)
+      : Promise.resolve({ data: [], error: null }),
+    lineIds.length
+      ? admin.from('commerce_pickup_commands').select('id, order_line_id, allocation_id, quantity, actor_user_id, result, created_at').in('order_line_id', lineIds).order('created_at')
+      : Promise.resolve({ data: [], error: null }),
+    lineIds.length
+      ? admin.from('audit_log').select('id, actor_user_id, actor_type, action, entity_table, entity_id, created_at').in('entity_id', [order.id, ...lineIds]).order('created_at')
+      : Promise.resolve({ data: [], error: null }),
+    activityIds.length
+      ? admin.from('activity_sessions').select('id, name, session_type, start_time, end_time').in('id', activityIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const secondaryError = customerResult.error || allocationResult.error || commandResult.error || auditResult.error || activityResult.error;
+  if (secondaryError) throw new Error(secondaryError.message);
+
+  const receipt = (receipts || [])[0] || null;
+  const customer = customerResult.data || null;
+  const refundRows = refunds || [];
+  const refundedQuantityByLine = new Map<string, number>();
+  const blockingRefundLineIds = new Set<string>();
+  for (const refund of refundRows) {
+    for (const refundLine of refund.commerce_refund_lines || []) {
+      if (refund.status === 'succeeded') {
+        refundedQuantityByLine.set(refundLine.commerce_order_line_id,
+          (refundedQuantityByLine.get(refundLine.commerce_order_line_id) || 0) + Number(refundLine.quantity || 0));
+      }
+      if (['preparing', 'pending', 'attention'].includes(String(refund.status))) blockingRefundLineIds.add(refundLine.commerce_order_line_id);
+    }
+  }
+  const activityById = new Map((activityResult.data || []).map((activity: any) => [String(activity.id), activity]));
+  const enrichedLines = lineRows.map((line: any) => {
+    const collected = Number(line.collected_quantity || 0);
+    const refunded = refundedQuantityByLine.get(String(line.id)) || 0;
+    const stocklessSucceededRefundBlock = line.inventory_policy !== 'tracked' && refunded > 0;
+    const remaining = ['collected', 'not_collected'].includes(String(line.fulfillment_status))
+      ? 0
+      : Math.max(0, Number(line.quantity || 0) - collected - Number(line.cancelled_quantity || 0) - Math.max(0, refunded - collected));
+    return {
+      ...line,
+      issued_quantity: collected,
+      refunded_quantity: refunded,
+      remaining_quantity: remaining,
+      pickup_eligible: order.status === 'paid'
+        && ['pending_pickup', 'attention'].includes(String(line.fulfillment_status))
+        && remaining > 0
+        && !blockingRefundLineIds.has(String(line.id))
+        && !stocklessSucceededRefundBlock,
+      pickup_block_reason: blockingRefundLineIds.has(String(line.id)) || stocklessSucceededRefundBlock
+        ? 'refund_attention'
+        : order.status === 'attention'
+          ? 'order_attention'
+          : remaining <= 0 ? 'nothing_remaining' : null,
+      activity: line.activity_session_id ? activityById.get(String(line.activity_session_id)) || null : null,
+    };
+  });
+
+  const identityState = orderIdentityState(order);
+  const customerName = order.guest_name || receipt?.customer_name || canonicalCustomerName(customer) || 'Kund utan namn';
+  const customerEmail = order.guest_email || receipt?.customer_email || customer?.primary_email || null;
+  const history = [
+    { id: `order:${order.id}`, occurred_at: order.created_at, type: 'order_created', label: 'Order skapad' },
+    ...(order.checkout_frozen_at ? [{ id: `frozen:${order.id}`, occurred_at: order.checkout_frozen_at, type: 'order_frozen', label: 'Kommersiell snapshot låst' }] : []),
+    ...(order.paid_at ? [{ id: `paid:${order.id}`, occurred_at: order.paid_at, type: 'payment_paid', label: 'Betalning bekräftad' }] : []),
+    ...(commandResult.data || []).map((command: any) => ({
+      id: `pickup:${command.id}`, occurred_at: command.created_at, type: 'pickup',
+      label: `${Number(command.quantity || 0)} utlämnad`, actor_user_id: command.actor_user_id,
+      line_id: command.order_line_id, result: command.result,
+    })),
+    ...(auditResult.data || []).map((event: any) => ({
+      id: `audit:${event.id}`, occurred_at: event.created_at, type: 'audit', label: event.action,
+      actor_user_id: event.actor_user_id, entity_id: event.entity_id,
+    })),
+  ].sort((left, right) => new Date(left.occurred_at).getTime() - new Date(right.occurred_at).getTime());
+
+  return {
+    order: {
+      ...order,
+      order_reference: receipt?.receipt_number || order.id,
+      payment_status: receipt?.payment_status || order.status,
+      payment_method: receipt?.payment_method || null,
+      refund_status: latestRefundState(refundRows),
+    },
+    customer: {
+      customer_id: order.customer_id || null,
+      user_id: order.user_id || null,
+      name: customerName,
+      email: customerEmail,
+      phone: order.guest_phone || receipt?.customer_phone || customer?.primary_phone || null,
+      identity_state: identityState,
+      canonical_name: canonicalCustomerName(customer),
+    },
+    lines: enrichedLines,
+    receipt,
+    receipt_lines: receiptLines || [],
+    ledger_entries: ledger || [],
+    refunds: refundRows,
+    allocations: allocationResult.data || [],
+    pickup_commands: commandResult.data || [],
+    audit_events: (auditResult.data || []).map((event: any) => ({
+      id: event.id,
+      actor_user_id: event.actor_user_id,
+      actor_type: event.actor_type,
+      action: event.action,
+      entity_table: event.entity_table,
+      entity_id: event.entity_id,
+      created_at: event.created_at,
+    })),
+    history,
+  };
 }
 
 const commerceHandler = async (req: Request) => {
@@ -1851,6 +2274,33 @@ const commerceHandler = async (req: Request) => {
 
   try {
     const { userId } = await optionalUser(req);
+
+    if (req.method === 'GET' && path === 'product-media') {
+      const mediaId = String(url.searchParams.get('id') || '').trim();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(mediaId)) {
+        return errorResponse('Invalid media id', 400);
+      }
+      const { data: media, error: mediaError } = await admin.from('product_media')
+        .select('id, product_id, storage_bucket, storage_path, status')
+        .eq('id', mediaId).eq('status', 'active').maybeSingle();
+      if (mediaError) throw new Error(mediaError.message);
+      if (!media || media.storage_bucket !== 'product-media') return errorResponse('Product image not found', 404);
+      const { data: product, error: productError } = await admin.from('access_products')
+        .select('id').eq('id', media.product_id).eq('status', 'active').eq('is_active', true).maybeSingle();
+      if (productError) throw new Error(productError.message);
+      if (!product) return errorResponse('Product image not found', 404);
+      const { data: image, error: imageError } = await admin.storage.from(media.storage_bucket).download(media.storage_path);
+      if (imageError || !image) return errorResponse('Product image unavailable', 404);
+      return new Response(image, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': image.type || 'application/octet-stream',
+          'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
 
     if (req.method === 'GET' && path === 'catalog') {
       const venueId = url.searchParams.get('venueId') || '';
@@ -1895,14 +2345,18 @@ const commerceHandler = async (req: Request) => {
       if (variantError) throw new Error(variantError.message);
       const variantIds = (variants || []).map((variant: any) => String(variant.id));
       const locationIds = (listings || []).map((listing: any) => String(listing.default_inventory_location_id));
-      const [{ data: assignments, error: assignmentError }, { data: optionValues, error: optionValueError }, { data: options, error: optionError }, { data: levels, error: levelError }, { data: locations, error: locationError }] = await Promise.all([
+      const [{ data: assignments, error: assignmentError }, { data: optionValues, error: optionValueError }, { data: options, error: optionError }, { data: levels, error: levelError }, { data: locations, error: locationError }, { data: media, error: mediaError }] = await Promise.all([
         variantIds.length ? admin.from('product_variant_option_values').select('*').in('variant_id', variantIds) : Promise.resolve({ data: [], error: null }),
         trackedProductIds.length ? admin.from('product_option_values').select('id, option_id, code, label, swatch, sort_order, status').eq('status', 'active') : Promise.resolve({ data: [], error: null }),
         trackedProductIds.length ? admin.from('product_options').select('id, product_id, code, label, sort_order, status').in('product_id', trackedProductIds).eq('status', 'active') : Promise.resolve({ data: [], error: null }),
         variantIds.length && locationIds.length ? admin.from('inventory_levels').select('variant_id, location_id, on_hand, reserved, allocated, incident_blocked').in('variant_id', variantIds).in('location_id', locationIds) : Promise.resolve({ data: [], error: null }),
         locationIds.length ? admin.from('inventory_locations').select('id, venue_id, name, status').in('id', locationIds) : Promise.resolve({ data: [], error: null }),
+        productRows.length ? admin.from('product_media')
+          .select('id, product_id, public_url, alt_text, sort_order, is_cover')
+          .in('product_id', productRows.map((product) => product.id)).eq('status', 'active').order('sort_order').order('id')
+          : Promise.resolve({ data: [], error: null }),
       ]);
-      const catalogDetailError = assignmentError || optionValueError || optionError || levelError || locationError;
+      const catalogDetailError = assignmentError || optionValueError || optionError || levelError || locationError || mediaError;
       if (catalogDetailError) throw new Error(catalogDetailError.message);
       const listingByProduct = new Map((listings || []).map((row: any) => [String(row.product_id), row]));
       const locationById = new Map((locations || []).map((row: any) => [String(row.id), row]));
@@ -1910,6 +2364,12 @@ const commerceHandler = async (req: Request) => {
       const valueById = new Map((optionValues || []).map((row: any) => [String(row.id), row]));
       const levelByKey = new Map((levels || []).map((row: any) => [`${row.variant_id}:${row.location_id}`, row]));
       const assignmentsByVariant = new Map<string, any[]>();
+      const mediaByProduct = new Map<string, CommerceProductMedia[]>();
+      for (const item of (media || []) as CommerceProductMedia[]) {
+        const list = mediaByProduct.get(String(item.product_id)) || [];
+        list.push({ id: item.id, url: item.public_url, alt_text: item.alt_text, sort_order: item.sort_order, is_cover: item.is_cover });
+        mediaByProduct.set(String(item.product_id), list);
+      }
       for (const assignment of assignments || []) {
         const list = assignmentsByVariant.get(String(assignment.variant_id)) || [];
         list.push(assignment);
@@ -1969,6 +2429,7 @@ const commerceHandler = async (req: Request) => {
         return store.eligible || addon.eligible;
       }).map((product) => ({
         ...product,
+        media: mediaByProduct.get(product.id) || [],
         max_quantity: productMaxQuantity(product),
         store_eligible: product.inventory_policy === 'tracked'
           ? Boolean(listingByProduct.get(product.id)?.tracked_sales_enabled) && venue.tracked_merch_sales_enabled === true
@@ -3437,6 +3898,27 @@ const commerceHandler = async (req: Request) => {
       return jsonResponse({ disposition: data }, 200, 0);
     }
 
+    if (req.method === 'GET' && path === 'staff-orders') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      if (!venueId) return errorResponse('Missing venueId', 400);
+      await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff']);
+      const search = String(url.searchParams.get('search') || '').trim().slice(0, 160);
+      const orders = await searchStaffCommerceOrders(admin, venueId, search);
+      return jsonResponse({ orders }, 200, 5);
+    }
+
+    if (req.method === 'GET' && path === 'staff-order') {
+      if (!userId) return errorResponse('Unauthorized', 401);
+      const venueId = String(url.searchParams.get('venueId') || '').trim();
+      const orderId = String(url.searchParams.get('orderId') || '').trim();
+      if (!venueId || !UUID_PATTERN.test(orderId)) return errorResponse('Missing or invalid order scope', 400);
+      await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff']);
+      const detail = await loadStaffCommerceOrder(admin, venueId, orderId);
+      if (!detail) return errorResponse('Order not found', 404);
+      return jsonResponse(detail, 200, 5);
+    }
+
     if (req.method === 'GET' && path === 'fulfillment') {
       if (!userId) return errorResponse('Unauthorized', 401);
       const venueId = url.searchParams.get('venueId') || '';
@@ -3464,24 +3946,14 @@ const commerceHandler = async (req: Request) => {
       if (lineError || !line) return errorResponse('Fulfillment line not found', 404);
       const linkedOrder = Array.isArray(line.commerce_orders) ? line.commerce_orders[0] : line.commerce_orders;
       if (linkedOrder?.venue_id !== venueId) return errorResponse('Forbidden', 403);
-      const { data: inventoryLine } = await admin.from('commerce_order_lines')
-        .select('inventory_policy').eq('id', body.line_id).maybeSingle();
       const requestId = String(body.idempotency_key || req.headers.get('x-request-id') || crypto.randomUUID());
-      const { error } = inventoryLine?.inventory_policy === 'tracked'
-        ? await admin.rpc('commerce_r2a_collect_pickup', {
-          p_order_line_id: body.line_id,
-          p_quantity: Math.floor(Number(body.quantity || 1)),
-          p_venue_id: venueId,
-          p_idempotency_key: requestId,
-          p_actor_user_id: userId,
-        })
-        : await admin.rpc('transition_commerce_fulfillment', {
-          p_line_id: body.line_id,
-          p_next_status: body.status,
-          p_actor_user_id: userId,
-          p_request_id: requestId,
-          p_metadata: { source: 'api-commerce' },
-        });
+      const { error } = await admin.rpc('commerce_r2a_collect_pickup', {
+        p_order_line_id: body.line_id,
+        p_quantity: Math.floor(Number(body.quantity || 1)),
+        p_venue_id: venueId,
+        p_idempotency_key: requestId,
+        p_actor_user_id: userId,
+      });
       if (error) throw new Error(error.message);
       const [item] = await loadDeskFulfillmentItems(admin, venueId, { lineId: body.line_id });
       if (!item) throw new Error('Fulfillment line not found');
@@ -3500,6 +3972,11 @@ const commerceHandler = async (req: Request) => {
     if (message.includes('sold_out')) return errorResponse('Den valda varianten är slutsåld.', 409);
     if (message.includes('tracked_activity_addon_unsupported')) return errorResponse('Lagerspårade varor kan bara köpas fristående i R2A.', 409);
     if (message.includes('inventory_incident_blocked')) return errorResponse('Varan är tillfälligt blockerad för lageravstämning.', 409);
+    if (message.includes('pickup_blocked_by_pending_refund')) return errorResponse('Utlämningen är blockerad medan återbetalningen stäms av.', 409);
+    if (message.includes('stockless_pickup_blocked_by_succeeded_refund')) return errorResponse('Utlämningen är blockerad efter återbetalning och måste stämmas av.', 409);
+    if (message.includes('pickup_blocked_by_order_attention')) return errorResponse('Ordern kräver avstämning innan utlämning.', 409);
+    if (message.includes('pickup_quantity_conflicts')) return errorResponse('Antalet överstiger vad som återstår att lämna ut.', 409);
+    if (message.includes('idempotency_key_reused')) return errorResponse('Utlämningsförsöket matchar inte den ursprungliga begäran.', 409);
     if (message.includes('not found') || message.includes('not_found')) return errorResponse(message, 404);
     if (message.includes('Platsen hann tas')) return errorResponse(message, 409);
     if (message.includes('Kursen är fullbokad')) return errorResponse(message, 409);

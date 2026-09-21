@@ -146,7 +146,7 @@ async function fetchByCustomerOrUser(admin: ReturnType<typeof getServiceClient>,
   limit?: number;
   extra?: (query: any) => any;
 }) {
-  const queries: Promise<any>[] = [];
+  const queries: any[] = [];
   const customerIds = uniqueStrings(params.customerIds || []);
   const userIds = uniqueStrings(params.userIds || []);
 
@@ -301,6 +301,23 @@ Deno.serve(async (req) => {
       if (venueProfilesResult.error) return errorResponse(venueProfilesResult.error.message);
 
       const venueCustomerIds = uniqueStrings((venueProfilesResult.data || []).map((row: any) => row.customer_id));
+      const receiptSearchPattern = search.replace(/[%_,()]/g, ' ').trim();
+      const directReceiptMatchesResult = search && venueId
+        ? await admin.from('booking_receipts')
+          .select('id, receipt_number, commerce_order_id, customer_id, user_id, customer_name, customer_email, customer_phone, product_description, purchase_type, issued_at, created_at')
+          .eq('venue_id', venueId)
+          .or([
+            `receipt_number.ilike.%${receiptSearchPattern}%`,
+            `customer_name.ilike.%${receiptSearchPattern}%`,
+            `customer_email.ilike.%${receiptSearchPattern}%`,
+          ].join(','))
+          .order('issued_at', { ascending: false })
+          .limit(100)
+        : { data: [], error: null };
+      if (directReceiptMatchesResult.error) return errorResponse(directReceiptMatchesResult.error.message, 500);
+      const receiptCustomerIds = uniqueStrings((directReceiptMatchesResult.data || []).map((row: any) => row.customer_id));
+      const receiptUserIds = uniqueStrings((directReceiptMatchesResult.data || []).map((row: any) => row.user_id));
+      const eligibleCustomerIds = uniqueStrings([...venueCustomerIds, ...receiptCustomerIds]);
       let authUsersResultForSearch: any = null;
       let searchMatchedUserIds: string[] = [];
       if (search) {
@@ -317,8 +334,9 @@ Deno.serve(async (req) => {
         .eq('status', 'active')
         .limit(fetchLimit);
       if (venueId) {
-        if (venueCustomerIds.length > 0) {
-          customerQuery = customerQuery.in('id', venueCustomerIds);
+        if (eligibleCustomerIds.length > 0) {
+          customerQuery = customerQuery.in('id', eligibleCustomerIds);
+          if (search) customerQuery = customerQuery.limit(fetchLimit + receiptCustomerIds.length);
         } else {
           customerQuery = customerQuery.limit(0);
         }
@@ -340,6 +358,9 @@ Deno.serve(async (req) => {
         if (searchMatchedUserIds.length) {
           profileQueries.push(admin.from('player_profiles').select('*').in('auth_user_id', searchMatchedUserIds).limit(fetchLimit));
         }
+        if (receiptUserIds.length) {
+          profileQueries.push(admin.from('player_profiles').select('*').in('auth_user_id', receiptUserIds).limit(fetchLimit));
+        }
         const profileResults = await Promise.all(profileQueries);
         const profileError = profileResults.find((result) => result.error)?.error;
         if (profileError) return errorResponse(profileError.message);
@@ -350,6 +371,18 @@ Deno.serve(async (req) => {
           .limit(fetchLimit);
         if (qErr) return errorResponse(qErr.message);
         profiles = profileRows || [];
+      }
+
+      if (venueId) {
+        const eligibleUserIds = new Set(uniqueStrings([
+          ...receiptUserIds,
+          ...(customers || []).map((customer: any) => customer.auth_user_id),
+        ]));
+        const eligibleCustomerIdSet = new Set(eligibleCustomerIds);
+        profiles = profiles.filter((profile: any) =>
+          (profile.customer_id && eligibleCustomerIdSet.has(profile.customer_id))
+          || (profile.auth_user_id && eligibleUserIds.has(profile.auth_user_id))
+        );
       }
 
       const customerIds = uniqueStrings((customers || []).map((customer: any) => customer.id));
@@ -365,7 +398,7 @@ Deno.serve(async (req) => {
         ? Promise.resolve(authUsersResultForSearch)
         : admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
       const receiptsPromise = fetchByCustomerOrUser(admin, 'booking_receipts',
-        'id, customer_id, user_id, customer_name, customer_email, customer_phone, product_description, purchase_type, issued_at, created_at',
+        'id, receipt_number, commerce_order_id, customer_id, user_id, customer_name, customer_email, customer_phone, product_description, purchase_type, issued_at, created_at',
         { venueId, customerIds, userIds: authUserIds, orderColumn: 'issued_at', ascending: false, limit: 1000 });
       const membershipsPromise = venueId
         ? fetchByCustomerOrUser(admin, 'memberships',
@@ -384,15 +417,22 @@ Deno.serve(async (req) => {
         membershipsPromise,
         checkinsPromise,
       ]);
-      const listError = [receiptsResult.error, membershipsResult.error, checkinsResult.error].find(Boolean);
+      const listError = [receiptsResult.error, directReceiptMatchesResult.error, membershipsResult.error, checkinsResult.error].find(Boolean);
       if (listError) return errorResponse(listError.message, 500);
 
-      const usersById = new Map((authUsersResult.data?.users || []).map((user: any) => [user.id, user]));
+      const usersById = new Map<string, any>((authUsersResult.data?.users || []).map((user: any) => [user.id, user]));
 
       const receiptByKey = new Map<string, any>();
-      for (const receipt of receiptsResult.data || []) {
+      const receiptsByKey = new Map<string, any[]>();
+      const allReceiptRows = uniqueRowsById([...(receiptsResult.data || []), ...(directReceiptMatchesResult.data || [])]);
+      for (const receipt of allReceiptRows) {
         if (receipt.customer_id && !receiptByKey.has(`customer:${receipt.customer_id}`)) receiptByKey.set(`customer:${receipt.customer_id}`, receipt);
         if (receipt.user_id && !receiptByKey.has(`user:${receipt.user_id}`)) receiptByKey.set(`user:${receipt.user_id}`, receipt);
+        for (const key of [receipt.customer_id ? `customer:${receipt.customer_id}` : '', receipt.user_id ? `user:${receipt.user_id}` : ''].filter(Boolean)) {
+          const rows = receiptsByKey.get(key) || [];
+          if (!rows.some((row) => row.id === receipt.id)) rows.push(receipt);
+          receiptsByKey.set(key, rows);
+        }
       }
 
       const membershipByKey = new Map<string, any>();
@@ -411,6 +451,9 @@ Deno.serve(async (req) => {
         const profile = profileByCustomerId.get(customer.id) || profileByUserId.get(customer.auth_user_id);
         const authUser = customer.auth_user_id ? usersById.get(customer.auth_user_id) : null;
         const receipt = receiptByKey.get(`customer:${customer.id}`) || (customer.auth_user_id ? receiptByKey.get(`user:${customer.auth_user_id}`) : null);
+        const receiptRows = receiptsByKey.get(`customer:${customer.id}`)
+          || (customer.auth_user_id ? receiptsByKey.get(`user:${customer.auth_user_id}`) : null)
+          || [];
         const checkin = checkinByKey.get(`customer:${customer.id}`) || (customer.auth_user_id ? checkinByKey.get(`user:${customer.auth_user_id}`) : null);
         const displayName = cleanString(customer.display_name) || cleanString(profile?.display_name);
         const fullName = customerFullName(customer) || profileFullName(profile || {});
@@ -436,6 +479,17 @@ Deno.serve(async (req) => {
           full_name: fullName || receiptName,
           identity_title: identityTitle,
           identity_initials: buildInitialsSeed(initialsSeed),
+          identity_state: customer.auth_user_id || profile?.auth_user_id ? 'account' : 'customer',
+          identity_aliases: uniqueStrings([
+            displayName,
+            fullName,
+            email,
+            phone,
+            ...receiptRows.map((row: any) => row.customer_name),
+            ...receiptRows.map((row: any) => row.customer_email),
+          ]),
+          order_references: uniqueStrings(receiptRows.map((row: any) => row.receipt_number)),
+          commerce_order_ids: uniqueStrings(receiptRows.map((row: any) => row.commerce_order_id)),
           first_seen_at: venueProfile?.first_seen_at || null,
           last_seen_at: venueProfile?.last_seen_at || null,
           visit_count: venueProfile?.visit_count || 0,
@@ -457,6 +511,7 @@ Deno.serve(async (req) => {
         .map((profile: any) => {
           const authUser = usersById.get(profile.auth_user_id);
           const receipt = receiptByKey.get(`user:${profile.auth_user_id}`);
+          const receiptRows = receiptsByKey.get(`user:${profile.auth_user_id}`) || [];
           const checkin = checkinByKey.get(`user:${profile.auth_user_id}`);
           const displayName = cleanString(profile.display_name);
           const fullName = profileFullName(profile);
@@ -473,6 +528,17 @@ Deno.serve(async (req) => {
             full_name: fullName || receiptName,
             identity_title: identityTitleFrom({ display_name: displayName, email, full_name: fullName, receipt_name: receiptName }),
             identity_initials: buildInitialsSeed(displayName || fullName || receiptName || email),
+            identity_state: profile.auth_user_id ? 'account' : 'customer',
+            identity_aliases: uniqueStrings([
+              displayName,
+              fullName,
+              email,
+              phone,
+              ...receiptRows.map((row: any) => row.customer_name),
+              ...receiptRows.map((row: any) => row.customer_email),
+            ]),
+            order_references: uniqueStrings(receiptRows.map((row: any) => row.receipt_number)),
+            commerce_order_ids: uniqueStrings(receiptRows.map((row: any) => row.commerce_order_id)),
             active_membership_tier: membership?.membership_tiers || null,
             has_active_membership: Boolean(membership),
             last_purchase_at: receipt?.issued_at || receipt?.created_at || null,
@@ -481,7 +547,43 @@ Deno.serve(async (req) => {
             last_checkin_type: checkin?.entry_type || null,
           };
         });
-      const enriched = [...enrichedFromCustomers, ...enrichedFallbackProfiles];
+      const linkedCustomerKeys = new Set([
+        ...enrichedFromCustomers.map((row: any) => row.customer_id ? `customer:${row.customer_id}` : ''),
+        ...enrichedFromCustomers.map((row: any) => row.auth_user_id ? `user:${row.auth_user_id}` : ''),
+        ...enrichedFallbackProfiles.map((row: any) => row.customer_id ? `customer:${row.customer_id}` : ''),
+        ...enrichedFallbackProfiles.map((row: any) => row.auth_user_id ? `user:${row.auth_user_id}` : ''),
+      ].filter(Boolean));
+      const enrichedGuestOrders = (directReceiptMatchesResult.data || [])
+        .filter((receipt: any) => receipt.commerce_order_id)
+        .filter((receipt: any) => !receipt.customer_id && !receipt.user_id)
+        .filter((receipt: any) => !linkedCustomerKeys.has(`customer:${receipt.customer_id}`) && !linkedCustomerKeys.has(`user:${receipt.user_id}`))
+        .map((receipt: any) => ({
+          id: `guest-order:${receipt.commerce_order_id}`,
+          customer_id: null,
+          profile_id: null,
+          auth_user_id: null,
+          display_name: cleanString(receipt.customer_name),
+          first_name: null,
+          last_name: null,
+          email: cleanString(receipt.customer_email),
+          phone: cleanString(receipt.customer_phone),
+          full_name: cleanString(receipt.customer_name),
+          identity_title: identityTitleFrom({
+            display_name: cleanString(receipt.customer_name),
+            email: cleanString(receipt.customer_email),
+            full_name: null,
+            receipt_name: cleanString(receipt.customer_name),
+          }),
+          identity_initials: buildInitialsSeed(cleanString(receipt.customer_name) || cleanString(receipt.customer_email)),
+          identity_state: 'guest',
+          identity_aliases: uniqueStrings([receipt.customer_name, receipt.customer_email, receipt.customer_phone]),
+          order_references: uniqueStrings([receipt.receipt_number]),
+          commerce_order_ids: uniqueStrings([receipt.commerce_order_id]),
+          last_purchase_at: receipt.issued_at || receipt.created_at || null,
+          last_purchase_label: receipt.product_description || receipt.purchase_type || null,
+          has_active_membership: false,
+        }));
+      const enriched = [...enrichedFromCustomers, ...enrichedFallbackProfiles, ...enrichedGuestOrders];
 
       const needle = search.toLowerCase();
       const filtered = needle
@@ -495,6 +597,9 @@ Deno.serve(async (req) => {
           customer.identity_title,
           customer.email,
           customer.phone,
+          ...(customer.identity_aliases || []),
+          ...(customer.order_references || []),
+          ...(customer.commerce_order_ids || []),
         ].some((value) => String(value || '').toLowerCase().includes(needle)))
         : enriched;
 
@@ -513,12 +618,15 @@ Deno.serve(async (req) => {
       return jsonResponse(data, 200, 10);
     }
 
-    // GET /api-customers/360?venueId=X&customerId=Y or userId=Y
+    // GET /api-customers/360?venueId=X&customerId=Y or userId=Y or commerceOrderId=Y
     if (req.method === 'GET' && path === '360') {
       const venueId = cleanString(url.searchParams.get('venueId'));
       const requestedCustomerId = cleanString(url.searchParams.get('customerId')) || cleanString(url.searchParams.get('customer_id'));
       const requestedUserId = cleanString(url.searchParams.get('userId'));
-      if (!venueId || (!requestedCustomerId && !requestedUserId)) return errorResponse('Missing venueId and customerId or userId', 400);
+      const requestedCommerceOrderId = cleanString(url.searchParams.get('commerceOrderId'));
+      if (!venueId || (!requestedCustomerId && !requestedUserId && !requestedCommerceOrderId)) {
+        return errorResponse('Missing venueId and customerId, userId or commerceOrderId', 400);
+      }
 
       const admin = getServiceClient();
       const canList = await assertCanListCustomers(admin, userId, venueId);
@@ -530,6 +638,24 @@ Deno.serve(async (req) => {
       let profile: any = null;
       let targetCustomerId = requestedCustomerId;
       let targetUserId = requestedUserId;
+      let identityOrder: any = null;
+
+      if (requestedCommerceOrderId) {
+        const { data: orderRow, error: orderErr } = await admin.from('commerce_orders')
+          .select('id, venue_id, customer_id, user_id, guest_name, guest_email, guest_phone, booking_receipt_id, status, created_at, paid_at, total_inc_vat_minor, currency')
+          .eq('id', requestedCommerceOrderId)
+          .eq('venue_id', venueId)
+          .maybeSingle();
+        if (orderErr) return errorResponse(orderErr.message, 500);
+        if (!orderRow) return errorResponse('Order identity not found', 404);
+        if ((requestedCustomerId && requestedCustomerId !== cleanString(orderRow.customer_id))
+          || (requestedUserId && requestedUserId !== cleanString(orderRow.user_id))) {
+          return errorResponse('Order identity does not match requested customer', 404);
+        }
+        identityOrder = orderRow;
+        targetCustomerId = cleanString(orderRow.customer_id);
+        targetUserId = cleanString(orderRow.user_id);
+      }
 
       if (targetCustomerId) {
         const { data: customerRow, error: customerErr } = await admin
@@ -584,9 +710,32 @@ Deno.serve(async (req) => {
         targetUserId = targetUserId || cleanString(customer.auth_user_id);
       }
 
-      if (!targetCustomerId && !targetUserId) return errorResponse('Customer has no linked identity yet', 404);
+      if (!targetCustomerId && !targetUserId && !identityOrder) return errorResponse('Customer has no linked identity yet', 404);
       const customerIds = targetCustomerId ? [targetCustomerId] : [];
       const userIds = targetUserId ? [targetUserId] : [];
+
+      if (!identityOrder) {
+        const venueIdentityChecks: any[] = [];
+        if (targetCustomerId) {
+          venueIdentityChecks.push(
+            admin.from('customer_venue_profiles').select('customer_id').eq('venue_id', venueId).eq('customer_id', targetCustomerId).limit(1),
+            admin.from('booking_receipts').select('id').eq('venue_id', venueId).eq('customer_id', targetCustomerId).limit(1),
+            admin.from('commerce_orders').select('id').eq('venue_id', venueId).eq('customer_id', targetCustomerId).limit(1),
+          );
+        }
+        if (targetUserId) {
+          venueIdentityChecks.push(
+            admin.from('booking_receipts').select('id').eq('venue_id', venueId).eq('user_id', targetUserId).limit(1),
+            admin.from('commerce_orders').select('id').eq('venue_id', venueId).eq('user_id', targetUserId).limit(1),
+          );
+        }
+        const venueIdentityResults = await Promise.all(venueIdentityChecks);
+        const venueIdentityError = venueIdentityResults.find((result) => result.error)?.error;
+        if (venueIdentityError) return errorResponse(venueIdentityError.message, 500);
+        if (!venueIdentityResults.some((result) => (result.data || []).length > 0)) {
+          return errorResponse('Customer not found for venue', 404);
+        }
+      }
 
       const [
         authUserResult,
@@ -597,6 +746,7 @@ Deno.serve(async (req) => {
         checkinsResult,
         receiptsResult,
         bookingParticipantsResult,
+        commerceOrdersResult,
       ] = await Promise.all([
         targetUserId ? admin.auth.admin.getUserById(targetUserId) : Promise.resolve({ data: { user: null }, error: null }),
         fetchByCustomerOrUser(admin, 'bookings',
@@ -615,11 +765,14 @@ Deno.serve(async (req) => {
           'id, venue_id, customer_id, user_id, player_name, player_phone, entry_type, entitlement_id, checked_in_at, checked_out_at, session_date, created_at',
           { venueId, customerIds, userIds, orderColumn: 'checked_in_at', ascending: false, limit: 30 }),
         fetchByCustomerOrUser(admin, 'booking_receipts',
-          'id, receipt_number, booking_refs, stripe_session_id, stripe_invoice_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, issued_at, created_at',
+          'id, receipt_number, booking_refs, stripe_session_id, stripe_invoice_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, issued_at, created_at, commerce_order_id',
           { venueId, customerIds, userIds, orderColumn: 'issued_at', ascending: false, limit: 50 }),
         fetchByCustomerOrUser(admin, 'booking_participants',
           'id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, role, price_minor, currency, payment_status, payment_method, checked_in_at, created_at, bookings(id, booking_ref, start_time, end_time, status, venue_court_id, venue_courts(id, name, court_number, sport_type))',
           { venueId, customerIds, userIds, extra: (query) => query.neq('payment_status', 'cancelled'), orderColumn: 'created_at', ascending: false, limit: 50 }),
+        fetchByCustomerOrUser(admin, 'commerce_orders',
+          'id, venue_id, customer_id, user_id, status, currency, total_inc_vat_minor, total_ex_vat_minor, vat_amount_minor, booking_receipt_id, guest_name, guest_email, created_at, paid_at',
+          { venueId, customerIds, userIds, orderColumn: 'created_at', ascending: false, limit: 50 }),
       ]);
 
       const firstError = [
@@ -630,11 +783,25 @@ Deno.serve(async (req) => {
         checkinsResult.error,
         receiptsResult.error,
         bookingParticipantsResult.error,
+        commerceOrdersResult.error,
       ].find(Boolean);
       if (firstError) return errorResponse(firstError.message, 500);
 
       const authUser = authUserResult.data?.user || null;
-      const receipts = receiptsResult.data || [];
+      let receipts = receiptsResult.data || [];
+      let commerceOrders = commerceOrdersResult.data || [];
+      if (identityOrder && !commerceOrders.some((row: any) => row.id === identityOrder.id)) {
+        commerceOrders = [identityOrder, ...commerceOrders];
+      }
+      if (identityOrder?.booking_receipt_id && !receipts.some((row: any) => row.id === identityOrder.booking_receipt_id)) {
+        const { data: identityReceipt, error: identityReceiptError } = await admin.from('booking_receipts')
+          .select('id, receipt_number, booking_refs, stripe_session_id, stripe_invoice_id, venue_id, customer_id, user_id, customer_name, customer_email, customer_phone, purchase_type, product_description, total_inc_vat, total_inc_vat_sek, vat_amount, vat_amount_sek, vat_rate, currency, payment_provider, payment_method, payment_status, stripe_payment_intent_id, stripe_customer_id, stripe_subscription_id, issued_at, created_at, commerce_order_id')
+          .eq('id', identityOrder.booking_receipt_id)
+          .eq('venue_id', venueId)
+          .maybeSingle();
+        if (identityReceiptError) return errorResponse(identityReceiptError.message, 500);
+        if (identityReceipt) receipts = [identityReceipt, ...receipts];
+      }
       const registrations = registrationsResult.data || [];
       const receiptIds = Array.from(new Set(receipts.map((row: any) => row.id).filter(Boolean)));
       const stripeSessionIds = Array.from(new Set(receipts.map((row: any) => row.stripe_session_id).filter(Boolean)));
@@ -686,11 +853,12 @@ Deno.serve(async (req) => {
       const name = customerFullName(customer)
         || fullName(profile)
         || cleanString(latestReceipt?.customer_name)
+        || cleanString(identityOrder?.guest_name)
         || cleanString(authUser?.user_metadata?.display_name)
         || cleanString(authUser?.email)
         || 'Kund utan namn';
-      const email = cleanString(customer?.primary_email) || cleanString(authUser?.email) || cleanString(latestReceipt?.customer_email);
-      const phone = cleanString(customer?.primary_phone) || cleanString(profile?.phone) || cleanString(latestReceipt?.customer_phone);
+      const email = cleanString(customer?.primary_email) || cleanString(authUser?.email) || cleanString(latestReceipt?.customer_email) || cleanString(identityOrder?.guest_email);
+      const phone = cleanString(customer?.primary_phone) || cleanString(profile?.phone) || cleanString(latestReceipt?.customer_phone) || cleanString(identityOrder?.guest_phone);
       const activeMembership = (membershipsResult.data || []).find((row: any) => row.status === 'active') || null;
       const ledgerEntries = Array.from(ledgerById.values()).sort((a, b) =>
         new Date(b.occurred_at || b.created_at).getTime() - new Date(a.occurred_at || a.created_at).getTime()
@@ -809,6 +977,20 @@ Deno.serve(async (req) => {
           first_name: customer?.first_name || profile?.first_name || null,
           last_name: customer?.last_name || profile?.last_name || null,
           created_at: customer?.created_at || profile?.created_at || authUser?.created_at || null,
+          identity_state: targetUserId ? 'account' : targetCustomerId ? 'customer' : 'guest',
+          identity_source: targetUserId
+            ? 'verified_account'
+            : targetCustomerId
+              ? 'canonical_customer'
+              : 'commerce_order_snapshot',
+          identity_aliases: uniqueStrings([
+            customerFullName(customer),
+            fullName(profile),
+            email,
+            phone,
+            ...receipts.map((receipt: any) => receipt.customer_name),
+            ...receipts.map((receipt: any) => receipt.customer_email),
+          ]),
         },
         membership_badge: activeMembership?.membership_tiers || null,
         active_membership: activeMembership,
@@ -828,6 +1010,16 @@ Deno.serve(async (req) => {
         subscriptions: subscriptionRows,
         checkins: checkinsResult.data || [],
         receipts,
+        commerce_orders: commerceOrders.map((commerceOrder: any) => {
+          const orderReceipt = receipts.find((receipt: any) => receipt.commerce_order_id === commerceOrder.id)
+            || (commerceOrder.booking_receipt_id ? receipts.find((receipt: any) => receipt.id === commerceOrder.booking_receipt_id) : null);
+          return {
+            ...commerceOrder,
+            order_reference: orderReceipt?.receipt_number || commerceOrder.id,
+            payment_status: orderReceipt?.payment_status || commerceOrder.status,
+            product_description: orderReceipt?.product_description || null,
+          };
+        }),
         ledger_entries: ledgerEntries,
         financial_timeline: financialTimeline,
         safe_actions: [

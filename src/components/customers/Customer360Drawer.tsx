@@ -15,6 +15,9 @@ type Customer360Response = {
     email?: string | null;
     phone?: string | null;
     created_at?: string | null;
+    identity_state?: "account" | "customer" | "guest";
+    identity_source?: string | null;
+    identity_aliases?: string[];
   };
   membership_badge?: { name?: string | null; color?: string | null } | null;
   active_membership?: Record<string, any> | null;
@@ -27,6 +30,7 @@ type Customer360Response = {
   receipts: any[];
   ledger_entries: any[];
   financial_timeline?: any[];
+  commerce_orders?: any[];
   safe_actions?: string[];
   booking_participants?: any[];
 };
@@ -37,7 +41,9 @@ type Props = {
   venueId?: string | null;
   customerId?: string | null;
   userId?: string | null;
+  commerceOrderId?: string | null;
   onManageProfile?: () => void;
+  onOpenOrder?: (orderId: string) => void;
 };
 
 const tz = "Europe/Stockholm";
@@ -139,15 +145,16 @@ function CommandButton({ icon: Icon, label, onClick }: { icon: typeof UserRound;
   );
 }
 
-export default function Customer360Drawer({ open, onClose, venueId, customerId, userId, onManageProfile }: Props) {
+export default function Customer360Drawer({ open, onClose, venueId, customerId, userId, commerceOrderId, onManageProfile, onOpenOrder }: Props) {
   const queryClient = useQueryClient();
   const customerQ = useQuery<Customer360Response>({
-    queryKey: ["customer-360", venueId, customerId, userId],
-    enabled: open && !!venueId && (!!customerId || !!userId),
+    queryKey: ["customer-360", venueId, customerId, userId, commerceOrderId],
+    enabled: open && !!venueId && (!!customerId || !!userId || !!commerceOrderId),
     queryFn: () => apiGet("api-customers", "360", {
       venueId: venueId!,
       ...(customerId ? { customerId } : {}),
       ...(userId ? { userId } : {}),
+      ...(commerceOrderId ? { commerceOrderId } : {}),
     }),
     staleTime: 30_000,
   });
@@ -155,6 +162,14 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
   const data = customerQ.data;
   const customer = data?.customer;
   const resolvedUserId = customer?.user_id || userId || null;
+  const identityStateLabel = customer?.identity_state === "account"
+    ? "Verifierat konto"
+    : customer?.identity_state === "customer"
+      ? "Kund utan konto"
+      : "Gästidentitet från order";
+  const visibleIdentityAliases = (customer?.identity_aliases || []).filter((alias) =>
+    alias && ![customer?.name, customer?.email, customer?.phone].some((canonical) => String(canonical || "").toLowerCase() === alias.toLowerCase())
+  );
   const membershipName = data?.membership_badge?.name || data?.active_membership?.membership_tiers?.name || null;
   const today = DateTime.now().setZone(tz).toISODate();
   const activeCheckin = data?.checkins?.find((row) => row.session_date === today && !row.checked_out_at);
@@ -245,6 +260,9 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                       <div className="min-w-0 flex-1">
                         <div className="min-w-0">
                           <h3 className="break-words text-2xl font-black leading-tight text-white">{customer.name || "Kund utan namn"}</h3>
+                          <span className="mt-2 inline-flex rounded-full border border-white/10 bg-white/[0.06] px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-white/65">
+                            {identityStateLabel}
+                          </span>
                           {membershipName && (
                             <span
                               className="mt-2 inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-white"
@@ -259,6 +277,9 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                           {customer.email && <p className="flex min-w-0 items-center gap-2 break-all"><Mail className="h-3.5 w-3.5 shrink-0" />{customer.email}</p>}
                           {customer.phone && <p className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 shrink-0" />{customer.phone}</p>}
                           {customer.created_at && <p className="text-xs">Kund sedan {formatDateTime(customer.created_at)}</p>}
+                          {visibleIdentityAliases.length ? (
+                            <p className="text-xs text-white/45">Order-/kvittoidentitet: {visibleIdentityAliases.slice(0, 4).join(" · ")}</p>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -361,6 +382,28 @@ export default function Customer360Drawer({ open, onClose, venueId, customerId, 
                         </div>
                       </div>
                     </div>
+                  </Section>
+
+                  <Section title="Orders" icon={ReceiptText}>
+                    {data.commerce_orders?.length ? data.commerce_orders.map((commerceOrder) => (
+                      <button
+                        key={commerceOrder.id}
+                        type="button"
+                        onClick={() => onOpenOrder?.(commerceOrder.id)}
+                        disabled={!onOpenOrder}
+                        className="w-full rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-left disabled:cursor-default"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-white">{commerceOrder.order_reference || commerceOrder.id}</p>
+                            <p className="mt-1 text-xs text-white/50">{commerceOrder.product_description || "Commerce order"} · {formatDateTime(commerceOrder.paid_at || commerceOrder.created_at)}</p>
+                          </div>
+                          <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-[10px] font-bold text-white/65">
+                            {commerceOrder.payment_status || commerceOrder.status}
+                          </span>
+                        </div>
+                      </button>
+                    )) : <Empty text="Inga Commerce-orders kunde kopplas med lagrade kanoniska ID:n." />}
                   </Section>
 
                   <Section title="Subscription Center" icon={Crown}>

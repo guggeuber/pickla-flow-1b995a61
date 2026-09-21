@@ -3,11 +3,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AdminProducts from "@/components/admin/AdminProducts";
+import { ProductMediaEditor } from "@/components/admin/commerce/ProductMediaEditor";
 import { buildVariantMatrix, productInventoryState, skuBaseFromName } from "@/lib/adminCommerce";
 
-const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), remove: vi.fn() }));
+const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), postForm: vi.fn(), patch: vi.fn(), remove: vi.fn() }));
 
-vi.mock("@/lib/api", () => ({ apiGet: api.get, apiPost: api.post, apiPatch: api.patch, apiDelete: api.remove }));
+vi.mock("@/lib/api", () => ({ apiGet: api.get, apiPost: api.post, apiPostForm: api.postForm, apiPatch: api.patch, apiDelete: api.remove }));
 
 const venueId = "7ff6e5dc-f27a-473b-af4e-2b358340ab81";
 const savedProduct = {
@@ -39,9 +40,9 @@ const savedProduct = {
   inventory_summary: { on_hand: 0, reserved: 0, allocated: 0, available_to_sell: 0, incident_blocked: false, configured: false, sold_out: true, low_stock: false },
 };
 
-function wrapper() {
+function wrapper(initialEntries: string[] = ["/"]) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>;
+  return ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}><MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter></QueryClientProvider>;
 }
 
 describe("Admin OS Commerce experience", () => {
@@ -49,7 +50,9 @@ describe("Admin OS Commerce experience", () => {
 
   beforeEach(() => {
     products = [];
-    api.get.mockReset(); api.post.mockReset(); api.patch.mockReset(); api.remove.mockReset();
+    api.get.mockReset(); api.post.mockReset(); api.postForm.mockReset(); api.patch.mockReset(); api.remove.mockReset();
+    api.postForm.mockResolvedValue({ media: [], image_url: null });
+    vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn((file: File) => `blob:${file.name}`), revokeObjectURL: vi.fn() });
     api.get.mockImplementation((_fn: string, endpoint: string) => {
       if (endpoint === "products") return Promise.resolve(products.map((product) => ({ ...product })));
       if (endpoint === "product-relationships") return Promise.resolve([]);
@@ -77,7 +80,52 @@ describe("Admin OS Commerce experience", () => {
     });
   });
 
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("uses a multi-file picker instead of a raw image URL and uploads the chosen cover order after draft creation", async () => {
+    render(<AdminProducts venueId={venueId} />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole("button", { name: "Ny produkt" }));
+    fireEvent.click(screen.getByRole("button", { name: /Fysisk vara/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    expect(screen.queryByLabelText(/Bildlänk|Image URL/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Namn"), { target: { value: "Pickla Classic Tee TEST" } });
+    fireEvent.change(screen.getByLabelText("Pris SEK"), { target: { value: "299" } });
+    const files = [
+      new File(["one"], "tee-front.png", { type: "image/png" }),
+      new File(["two"], "tee-back.png", { type: "image/png" }),
+      new File(["three"], "tee-detail.webp", { type: "image/webp" }),
+    ];
+    fireEvent.change(screen.getByTestId("product-image-input"), { target: { files } });
+    expect(screen.getByTestId("pending-product-media").querySelectorAll("article")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Välj bild 3 som omslag" }));
+    expect(screen.getByAltText("Pickla Classic Tee TEST 3")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skapa säkert utkast" }));
+
+    await waitFor(() => expect(api.postForm).toHaveBeenCalledTimes(1));
+    const form = api.postForm.mock.calls[0][2] as FormData;
+    expect(form.getAll("files").map((value) => (value as File).name)).toEqual(["tee-detail.webp", "tee-front.png", "tee-back.png"]);
+    expect(form.get("productId")).toBe(savedProduct.id);
+  });
+
+  it("removes an archived media thumbnail immediately from the server response", async () => {
+    const media = [
+      { id: "media-1", product_id: savedProduct.id, venue_id: venueId, url: "https://example.com/front.jpg", public_url: "https://example.com/front.jpg", storage_bucket: "product-media", storage_path: "front.jpg", alt_text: "Front", sort_order: 0, is_cover: true, status: "active" as const, created_at: "2026-09-21T00:00:00Z", updated_at: "2026-09-21T00:00:00Z" },
+      { id: "media-2", product_id: savedProduct.id, venue_id: venueId, url: "https://example.com/back.jpg", public_url: "https://example.com/back.jpg", storage_bucket: "product-media", storage_path: "back.jpg", alt_text: "Back", sort_order: 1, is_cover: false, status: "active" as const, created_at: "2026-09-21T00:00:00Z", updated_at: "2026-09-21T00:00:00Z" },
+    ];
+    api.patch.mockResolvedValue({ media: [media[1]], image_url: media[1].public_url });
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+
+    render(<ProductMediaEditor venueId={venueId} productId={savedProduct.id} productName={savedProduct.name} media={media} onChanged={onChanged} />);
+    fireEvent.click(screen.getByRole("button", { name: "Ta bort bild 1" }));
+
+    await waitFor(() => expect(screen.queryByAltText("Front")).not.toBeInTheDocument());
+    expect(screen.getByAltText("Back")).toBeInTheDocument();
+    expect(api.patch).toHaveBeenCalledWith("api-admin", "product-media", expect.objectContaining({ action: "archive", media_id: "media-1" }));
+  });
 
   it("generates the eight canonical Tee combinations with unique editable SKU suggestions", () => {
     const matrix = buildVariantMatrix("Pickla Classic Tee", ["Black", "Off-white"], ["S", "M", "L", "XL"]);
@@ -125,6 +173,42 @@ describe("Admin OS Commerce experience", () => {
     expect(within(tabs).getByRole("tab", { name: "Produkter" })).toBeInTheDocument();
     expect(within(tabs).getByRole("tab", { name: "Lager" })).toBeInTheDocument();
     expect(within(tabs).getByRole("tab", { name: "Ordrar" })).toBeInTheDocument();
+  });
+
+  it("opens the canonical product workspace from an operability deep link without restoring the legacy editor", async () => {
+    products = [{ ...savedProduct }];
+    render(<AdminProducts venueId={venueId} />, { wrapper: wrapper([`/hub/admin/products?productId=${savedProduct.id}`]) });
+    expect(await screen.findByTestId("commerce-product-detail")).toHaveTextContent(savedProduct.name);
+    expect(screen.getByRole("tab", { name: "Översikt" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Varianter" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Lager" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Ordrar" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Bildlänk|Image URL/i)).not.toBeInTheDocument();
+  });
+
+  it("uses the authorized canonical order search and opens canonical order detail", async () => {
+    const orderId = "22222222-2222-4222-8222-222222222222";
+    api.get.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "products") return Promise.resolve([]);
+      if (endpoint === "product-relationships") return Promise.resolve([]);
+      if (endpoint === "inventory-operations") return Promise.resolve({ locations: [], levels: [], movements: [], incidents: [], attempts: [], refunds: [], allocations: [], dispositions: [], orders: [], orders_page: { has_more: false, next_before: null }, movements_page: { has_more: false, next_before: null } });
+      if (endpoint === "staff-orders") return Promise.resolve({ orders: [{ order_id: orderId, order_reference: "PICKLA-2026-000829", customer_id: "customer-1", user_id: "user-1", customer_name: "Marcus Theander", customer_email: "marcus@example.test", identity_state: "account", created_at: "2026-09-21T08:00:00Z", paid_at: "2026-09-21T08:01:00Z", order_status: "paid", payment_status: "paid", payment_method: "card", total_inc_vat_minor: 4000, currency: "sek", refund_status: null, products: [{ line_id: "line-1", product_name: "Hyrrack", quantity: 4, issued_quantity: 0, remaining_quantity: 4, fulfillment_status: "pending_pickup", sku: "RACKET-RENTAL", variant_label: null }] }] });
+      if (endpoint === "staff-order") return Promise.resolve({ order: { id: orderId, venue_id: venueId, customer_id: "customer-1", user_id: "user-1", order_reference: "PICKLA-2026-000829", status: "paid", payment_status: "paid", payment_method: "card", refund_status: null, currency: "sek", subtotal_minor: 4000, discount_minor: 0, total_inc_vat_minor: 4000, total_ex_vat_minor: 3200, vat_amount_minor: 800, created_at: "2026-09-21T08:00:00Z", checkout_frozen_at: "2026-09-21T08:00:00Z", paid_at: "2026-09-21T08:01:00Z" }, customer: { customer_id: "customer-1", user_id: "user-1", name: "Marcus Theander", canonical_name: "Marcus Theander", email: "marcus@example.test", phone: null, identity_state: "account" }, lines: [{ id: "line-1", commerce_order_id: orderId, product_id: savedProduct.id, product_key: "hyr_rack", product_name: "Hyrrack", commerce_kind: "rental", quantity: 4, unit_price_minor: 1000, discount_minor: 0, line_total_inc_vat_minor: 4000, line_total_ex_vat_minor: 3200, vat_rate: 25, vat_amount_minor: 800, fulfillment_type: "desk_pickup", fulfillment_status: "pending_pickup", fulfilled_at: null, variant_id: null, sku: "RACKET-RENTAL", inventory_policy: "stockless", pickup_location_id: null, variant_snapshot: null, collected_quantity: 0, cancelled_quantity: 0, created_at: "2026-09-21T08:00:00Z", source_type: "catalog", source_id: savedProduct.id, issued_quantity: 0, refunded_quantity: 0, remaining_quantity: 4, pickup_eligible: true, pickup_block_reason: null }], receipt: { receipt_number: "PICKLA-2026-000829", product_description: "Hyrrack × 4", payment_status: "paid", issued_at: "2026-09-21T08:01:00Z" }, receipt_lines: [], ledger_entries: [], refunds: [], allocations: [], pickup_commands: [], audit_events: [], history: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<AdminProducts venueId={venueId} />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole("tab", { name: "Ordrar" }));
+    const search = await screen.findByPlaceholderText("Sök order, kvitto, kund, e-post eller SKU");
+    fireEvent.change(search, { target: { value: "RACKET-RENTAL" } });
+    const result = await screen.findByRole("button", { name: /PICKLA-2026-000829/ });
+    expect(result).toHaveTextContent("Marcus Theander");
+    expect(result).toHaveTextContent("4 återstår");
+    fireEvent.click(result);
+    expect(await screen.findByRole("heading", { name: "PICKLA-2026-000829" })).toBeInTheDocument();
+    expect(screen.getByText("Hyrrack")).toBeInTheDocument();
+    expect(api.get).toHaveBeenCalledWith("api-commerce", "staff-orders", { venueId, search: "RACKET-RENTAL" });
+    expect(api.get).toHaveBeenCalledWith("api-commerce", "staff-order", { venueId, orderId });
   });
 
   it("keeps receive, count, pickup, refund, disposition and archive on their canonical commands", async () => {

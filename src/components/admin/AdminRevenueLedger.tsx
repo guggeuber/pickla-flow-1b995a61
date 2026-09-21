@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Customer360Drawer from "@/components/customers/Customer360Drawer";
+import CommerceOrderDetailDrawer from "@/components/commerce/CommerceOrderDetailDrawer";
 
 interface Props {
   venueId: string;
@@ -76,7 +77,8 @@ function SummaryTile({ label, summary }: { label: string; summary?: AdminLedgerP
 
 export default function AdminRevenueLedger({ venueId }: Props) {
   const [date, setDate] = useState(stockholmToday());
-  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null } | null>(null);
+  const [customer360Target, setCustomer360Target] = useState<{ customerId?: string | null; userId?: string | null; commerceOrderId?: string | null } | null>(null);
+  const [orderDetailId, setOrderDetailId] = useState<string | null>(null);
   const ledgerQ = useAdminRevenueLedger(venueId, date);
   const zettleQ = useAdminZettleStatus(venueId);
   const zettleConnect = useAdminZettleConnect(venueId);
@@ -306,11 +308,21 @@ export default function AdminRevenueLedger({ venueId }: Props) {
                               setCustomer360Target({
                                 customerId: entry.receipt?.customer_id || entry.customer_id || null,
                                 userId: entry.receipt?.user_id || null,
+                                commerceOrderId: entry.commerce_order_id || entry.receipt?.commerce_order_id || null,
                               })
                             }
                             className="font-semibold text-primary hover:underline"
                           >
                             Öppna kund
+                          </button>
+                        ) : null}
+                        {entry.commerce_order_id || entry.receipt?.commerce_order_id ? (
+                          <button
+                            type="button"
+                            onClick={() => setOrderDetailId(entry.commerce_order_id || entry.receipt!.commerce_order_id!)}
+                            className="ml-2 font-semibold text-primary hover:underline"
+                          >
+                            Öppna order
                           </button>
                         ) : null}
                         <p>{entry.receipt?.customer_email || "Ingen e-post"}</p>
@@ -333,7 +345,22 @@ export default function AdminRevenueLedger({ venueId }: Props) {
         venueId={venueId}
         customerId={customer360Target?.customerId}
         userId={customer360Target?.userId}
+        commerceOrderId={customer360Target?.commerceOrderId}
+        onOpenOrder={(orderId) => {
+          setCustomer360Target(null);
+          setOrderDetailId(orderId);
+        }}
         onClose={() => setCustomer360Target(null)}
+      />
+      <CommerceOrderDetailDrawer
+        open={!!orderDetailId}
+        venueId={venueId}
+        orderId={orderDetailId}
+        onClose={() => setOrderDetailId(null)}
+        onOpenCustomer={(target) => {
+          setOrderDetailId(null);
+          setCustomer360Target(target);
+        }}
       />
     </div>
   );

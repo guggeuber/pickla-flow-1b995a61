@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut, type ApiRequestOptions } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, apiPut, type ApiRequestOptions } from "@/lib/api";
 
 export type CommerceKind = "participation" | "rental" | "merchandise";
 
@@ -22,6 +22,7 @@ export interface CommerceProduct {
   category: string | null;
   sport: string | null;
   image_url: string | null;
+  media?: CommerceProductMedia[];
   store_eligible?: boolean;
   resolver_rules?: Record<string, unknown> | null;
   max_quantity?: number;
@@ -34,6 +35,14 @@ export interface CommerceProduct {
     pickup_location_name: string | null;
     currency: string;
   } | null;
+}
+
+export interface CommerceProductMedia {
+  id: string;
+  url: string;
+  alt_text: string | null;
+  sort_order: number;
+  is_cover: boolean;
 }
 
 export interface CommerceVariantOption {
@@ -222,16 +231,33 @@ export interface CommerceOrderResponse {
 
 export interface DeskFulfillmentItem {
   line_id: string;
+  order_id: string;
   order_reference: string;
+  receipt_id: string | null;
+  receipt_number: string | null;
+  customer_id: string | null;
+  user_id: string | null;
   customer_name: string;
+  customer_email: string | null;
+  identity_state: "account" | "customer" | "guest";
   activity_title: string | null;
+  activity_session_id: string | null;
+  session_date: string | null;
+  source_type: string;
   product_name: string;
   quantity: number;
+  unit_price_minor: number;
   order_status: string;
+  payment_status: string;
+  payment_method: string | null;
+  refund_status: string | null;
   fulfillment_status: string;
   fulfilled_at: string | null;
+  created_at: string;
+  paid_at: string | null;
   pickup_instruction: string;
   pickup_eligible: boolean;
+  pickup_block_reason: string | null;
   sku?: string | null;
   variant_label?: string | null;
   collected_quantity: number;
@@ -240,6 +266,91 @@ export interface DeskFulfillmentItem {
 
 export interface DeskFulfillmentResponse {
   items: DeskFulfillmentItem[];
+}
+
+export interface StaffCommerceOrderSummary {
+  order_id: string;
+  order_reference: string;
+  customer_id: string | null;
+  user_id: string | null;
+  customer_name: string;
+  customer_email: string | null;
+  identity_state: "account" | "customer" | "guest";
+  created_at: string;
+  paid_at: string | null;
+  order_status: string;
+  payment_status: string;
+  payment_method: string | null;
+  total_inc_vat_minor: number;
+  currency: string;
+  refund_status: string | null;
+  products: Array<{
+    line_id: string;
+    product_name: string;
+    quantity: number;
+    issued_quantity: number;
+    remaining_quantity: number;
+    fulfillment_status: string;
+    sku: string | null;
+    variant_label: string | null;
+  }>;
+}
+
+export interface StaffCommerceOrderDetail {
+  order: {
+    id: string;
+    venue_id: string;
+    customer_id: string | null;
+    user_id: string | null;
+    order_reference: string;
+    status: string;
+    payment_status: string;
+    payment_method: string | null;
+    refund_status: string | null;
+    currency: string;
+    subtotal_minor: number;
+    discount_minor: number;
+    total_inc_vat_minor: number;
+    total_ex_vat_minor: number;
+    vat_amount_minor: number;
+    created_at: string;
+    checkout_frozen_at: string | null;
+    paid_at: string | null;
+  };
+  customer: {
+    customer_id: string | null;
+    user_id: string | null;
+    name: string;
+    canonical_name: string | null;
+    email: string | null;
+    phone: string | null;
+    identity_state: "account" | "customer" | "guest";
+  };
+  lines: Array<CommerceOrderLine & {
+    source_type: string;
+    source_id: string | null;
+    issued_quantity: number;
+    refunded_quantity: number;
+    remaining_quantity: number;
+    pickup_eligible: boolean;
+    pickup_block_reason: string | null;
+    activity?: { id: string; name: string; session_type?: string | null; start_time?: string | null; end_time?: string | null } | null;
+  }>;
+  receipt: Record<string, any> | null;
+  receipt_lines: Array<Record<string, any>>;
+  ledger_entries: Array<Record<string, any>>;
+  refunds: Array<Record<string, any>>;
+  allocations: Array<Record<string, any>>;
+  pickup_commands: Array<Record<string, any>>;
+  audit_events: Array<Record<string, any>>;
+  history: Array<{
+    id: string;
+    occurred_at: string;
+    type: string;
+    label: string;
+    actor_user_id?: string | null;
+    line_id?: string | null;
+  }>;
 }
 
 export const COMMERCE_PICKUP_COPY = "Hämtas vid disken.";
@@ -269,6 +380,32 @@ export function formatCommerceMoney(minor: number, currency = "SEK") {
     currency,
     maximumFractionDigits: minor % 100 === 0 ? 0 : 2,
   }).format(Number(minor || 0) / 100);
+}
+
+export function fetchStaffCommerceOrders(venueId: string, search = "") {
+  return apiGet<{ orders: StaffCommerceOrderSummary[] }>("api-commerce", "staff-orders", {
+    venueId,
+    ...(search.trim() ? { search: search.trim() } : {}),
+  });
+}
+
+export function fetchStaffCommerceOrder(venueId: string, orderId: string) {
+  return apiGet<StaffCommerceOrderDetail>("api-commerce", "staff-order", { venueId, orderId });
+}
+
+export function collectCommercePickup(input: {
+  venueId: string;
+  lineId: string;
+  quantity: number;
+  idempotencyKey: string;
+}) {
+  return apiPatch<{ item: DeskFulfillmentItem }>("api-commerce", "fulfillment", {
+    venue_id: input.venueId,
+    line_id: input.lineId,
+    status: "collected",
+    quantity: input.quantity,
+    idempotency_key: input.idempotencyKey,
+  });
 }
 
 export function fetchCommerceCatalog(venueId: string) {
