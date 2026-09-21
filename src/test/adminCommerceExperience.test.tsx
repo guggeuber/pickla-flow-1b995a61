@@ -126,4 +126,147 @@ describe("Admin OS Commerce experience", () => {
     expect(within(tabs).getByRole("tab", { name: "Lager" })).toBeInTheDocument();
     expect(within(tabs).getByRole("tab", { name: "Ordrar" })).toBeInTheDocument();
   });
+
+  it("keeps receive, count, pickup, refund, disposition and archive on their canonical commands", async () => {
+    const operationalProduct = {
+      ...savedProduct,
+      status: "active" as const,
+      variant_count: 1,
+      listing: {
+        id: "listing-1",
+        status: "active",
+        tracked_sales_enabled: false,
+        default_inventory_location_id: "location-1",
+        location_name: "Butik / reception",
+      },
+      inventory_summary: {
+        on_hand: 7,
+        reserved: 0,
+        allocated: 1,
+        available_to_sell: 6,
+        incident_blocked: false,
+        configured: true,
+        sold_out: false,
+        low_stock: false,
+      },
+    };
+    products = [operationalProduct];
+    const variant = {
+      id: "variant-1",
+      product_id: savedProduct.id,
+      sku: "PCL-TEE-BLK-M",
+      title: "Black / M",
+      price_override_minor: null,
+      image_url: null,
+      status: "active",
+      product_variant_option_values: [],
+      inventory: {
+        id: "level-1",
+        variant_id: "variant-1",
+        location_id: "location-1",
+        on_hand: 7,
+        reserved: 0,
+        allocated: 1,
+        available_to_sell: 6,
+        version: 4,
+        incident_blocked: false,
+      },
+    };
+    const order = {
+      id: "order-1",
+      status: "paid",
+      currency: "sek",
+      total_inc_vat_minor: 59800,
+      vat_amount_minor: 11960,
+      guest_name: "Stage Customer",
+      paid_at: "2026-09-20T20:00:00Z",
+      created_at: "2026-09-20T19:55:00Z",
+      booking_receipts: { receipt_number: "PICKLA-TEST-1", payment_status: "paid" },
+      lines: [{
+        id: "line-1",
+        commerce_order_id: "order-1",
+        product_id: savedProduct.id,
+        product_key: savedProduct.product_key,
+        product_name: savedProduct.name,
+        commerce_kind: "merchandise",
+        quantity: 2,
+        unit_price_minor: 29900,
+        discount_minor: 0,
+        line_total_inc_vat_minor: 59800,
+        vat_rate: 25,
+        vat_amount_minor: 11960,
+        line_total_ex_vat_minor: 47840,
+        fulfillment_type: "desk_pickup",
+        fulfillment_status: "pending_pickup",
+        fulfilled_at: null,
+        variant_id: variant.id,
+        sku: variant.sku,
+        inventory_policy: "tracked",
+        pickup_location_id: "location-1",
+        variant_snapshot: { display_label: "Black / M" },
+        collected_quantity: 1,
+        cancelled_quantity: 0,
+        created_at: "2026-09-20T19:55:00Z",
+      }],
+    };
+    const operations = {
+      locations: [{ id: "location-1", name: "Butik / reception" }],
+      levels: [variant.inventory],
+      movements: [],
+      incidents: [],
+      attempts: [],
+      refunds: [],
+      allocations: [{ id: "allocation-1", commerce_order_line_id: "line-1", status: "collected", quantity: 2 }],
+      dispositions: [],
+      orders: [order],
+      orders_page: { has_more: false, next_before: null },
+      movements_page: { has_more: false, next_before: null },
+    };
+    api.get.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "products") return Promise.resolve(products.map((product) => ({ ...product })));
+      if (endpoint === "product-relationships") return Promise.resolve([]);
+      if (endpoint === "inventory-operations") return Promise.resolve(operations);
+      if (endpoint === "product-variants") return Promise.resolve({
+        product: { id: savedProduct.id, inventory_policy: "tracked" },
+        venue: { franchisee_id: "seller-1", tracked_merch_sales_enabled: false, franchisees: { id: "seller-1", legal_name: "Pickla Solna AB" } },
+        listing: { id: "listing-1", tracked_sales_enabled: false, default_inventory_location_id: "location-1", inventory_locations: { name: "Butik / reception" } },
+        options: [],
+        variants: [variant],
+      });
+      return Promise.resolve([]);
+    });
+    api.patch.mockResolvedValue(operationalProduct);
+
+    render(<AdminProducts venueId={venueId} />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole("button", { name: /Pickla Classic Tee/ }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Lager" }));
+
+    fireEvent.change(screen.getByLabelText("Ta emot PCL-TEE-BLK-M"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("Orsak / referens"), { target: { value: "Initial delivery" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bekräfta mottagning" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-commerce", "inventory-receive", expect.objectContaining({ variant_id: variant.id, quantity: 3 })));
+
+    fireEvent.click(screen.getByRole("button", { name: "Korrigera / räkna" }));
+    fireEvent.change(screen.getByLabelText("Räkna PCL-TEE-BLK-M"), { target: { value: "6" } });
+    fireEvent.change(screen.getByLabelText("Orsak / referens"), { target: { value: "Physical count" } });
+    fireEvent.click(screen.getByRole("button", { name: "Spara inventering" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-commerce", "inventory-correct", expect.objectContaining({ physical_on_hand: 6, expected_version: 4 })));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Ordrar" }));
+    fireEvent.click(await screen.findByRole("button", { name: /PICKLA-TEST-1/ }));
+    expect(screen.getByRole("link", { name: "Hantera uthämtning i Desk" })).toHaveAttribute("href", "/desk");
+    expect(screen.getByText(/Återbetalar betalningen. Ändrar inte fysiskt lager/)).toBeInTheDocument();
+    expect(screen.getByText(/Registrerar vad som faktiskt hände med varan/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Starta återbetalning" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-commerce", "refund", expect.objectContaining({ order_id: order.id, lines: [{ line_id: "line-1", quantity: 1 }] })));
+    fireEvent.change(screen.getByLabelText("Fysiskt utfall"), { target: { value: "return_damaged" } });
+    fireEvent.click(screen.getByRole("button", { name: "Registrera fysisk sanning" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-commerce", "physical-disposition", expect.objectContaining({ line_id: "line-1", outcome: "return_damaged", quantity: 1 })));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Översikt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Arkivera vid nästa sparning" }));
+    fireEvent.click(screen.getByRole("button", { name: "Spara" }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith("api-admin", "products", expect.objectContaining({ productId: savedProduct.id, status: "archived" })));
+  });
 });
