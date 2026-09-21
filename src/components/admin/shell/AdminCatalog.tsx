@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { DateTime } from "luxon";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { ArrowLeft, CalendarDays, ChevronDown, ChevronRight, Crown, Loader2, Package, Plus, Tag } from "lucide-react";
+import { ArrowLeft, Boxes, CalendarDays, ChevronDown, ChevronRight, Crown, Loader2, Package, Plus, Receipt, Tag } from "lucide-react";
 import AdminCourses from "@/components/admin/AdminCourses";
 import AdminLeague from "@/components/admin/AdminLeague";
+import AdminCommerceWorkspace from "@/components/admin/commerce/AdminCommerceWorkspace";
 import { fetchCourseAdmin, type CourseDetail } from "@/lib/courses";
 import { fetchLeagueAdmin, type LeagueAdminSeason } from "@/lib/league";
 import { catalogOfferSection, sortCatalogOffers, visibleCatalogOffers, type CatalogOfferSection } from "@/lib/adminCatalog";
 import { seriesCustomerTitle, seriesPresentation, type SeriesPresentationType } from "@/lib/seriesPresentation";
+import type { CommerceSection } from "@/lib/adminCommerce";
 import { ax, AX_GRID_BG } from "./axTheme";
 import { AxChip } from "./axPrimitives";
 
@@ -125,6 +127,7 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
   const [createType, setCreateType] = useState<SeriesPresentationType | null>(null);
   const [choosingType, setChoosingType] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [commerceSection, setCommerceSection] = useState<CommerceSection | null>(null);
   const query = useQuery({
     queryKey: ["admin-courses", venueId],
     queryFn: () => fetchCourseAdmin(venueId!),
@@ -160,6 +163,10 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
   };
 
   if (!venueId) return <p className="py-10 text-center text-sm" style={{ color: ax("muted") }}>Välj venue först.</p>;
+
+  if (commerceSection) {
+    return <AdminCommerceWorkspace venueId={venueId} initialSection={commerceSection} onBack={() => setCommerceSection(null)} />;
+  }
 
   if (selectedSeriesId || createType) {
     return (
@@ -225,8 +232,10 @@ export default function AdminCatalog({ venueId, initialSeriesId = null, onCloseI
         </div>
       </section> : null}
 
-      <section className="grid grid-cols-3 gap-2" aria-label="Catalogverktyg">
-        <button type="button" onClick={() => onOpenModule("products")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Tag className="mx-auto h-4 w-4" style={{ color: ax("magenta") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Produkter</span></button>
+      <section className="grid grid-cols-3 gap-2 sm:grid-cols-5" aria-label="Catalogverktyg">
+        <button type="button" onClick={() => setCommerceSection("products")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Tag className="mx-auto h-4 w-4" style={{ color: ax("magenta") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Produkter</span></button>
+        <button type="button" onClick={() => setCommerceSection("inventory")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Boxes className="mx-auto h-4 w-4" style={{ color: ax("lime") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Lager</span></button>
+        <button type="button" onClick={() => setCommerceSection("orders")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Receipt className="mx-auto h-4 w-4" style={{ color: ax("electricSoft") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Ordrar</span></button>
         <button type="button" onClick={() => onOpenModule("memberships")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><Crown className="mx-auto h-4 w-4" style={{ color: ax("sun") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Medlemskap</span></button>
         <button type="button" onClick={() => onOpenModule("schedule")} className="rounded-xl p-3 text-center" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }}><CalendarDays className="mx-auto h-4 w-4" style={{ color: ax("electricSoft") }} /><span className="mt-1 block text-[10px] font-bold" style={{ color: "white" }}>Maskinrum</span></button>
       </section>

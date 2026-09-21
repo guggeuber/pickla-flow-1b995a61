@@ -3233,12 +3233,20 @@ const commerceHandler = async (req: Request) => {
     if (req.method === 'GET' && path === 'inventory-operations') {
       if (!userId) return errorResponse('Unauthorized', 401);
       const venueId = String(url.searchParams.get('venueId') || '').trim();
+      const orderLimit = Math.min(100, Math.max(1, Math.floor(Number(url.searchParams.get('orderLimit') || 50))));
+      const orderBefore = String(url.searchParams.get('orderBefore') || '').trim();
+      const movementLimit = Math.min(100, Math.max(1, Math.floor(Number(url.searchParams.get('movementLimit') || 50))));
+      const movementBefore = String(url.searchParams.get('movementBefore') || '').trim();
       await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff']);
       const { data: locations, error: locationError } = await admin.from('inventory_locations')
         .select('*').eq('venue_id', venueId).order('name');
       if (locationError) throw new Error(locationError.message);
       const locationIds = (locations || []).map((location: any) => location.id);
-      const [{ data: listings, error: listingError }, { data: levels, error: levelError }, { data: incidents, error: incidentError }, { data: attempts, error: attemptError }, { data: refunds, error: refundError }, { data: allocations, error: allocationError }] = await Promise.all([
+      let ordersQuery = admin.from('commerce_orders')
+        .select('id, customer_id, user_id, status, currency, subtotal_minor, discount_minor, total_inc_vat_minor, total_ex_vat_minor, vat_amount_minor, guest_name, paid_at, created_at, updated_at, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number, payment_status)')
+        .eq('venue_id', venueId).order('created_at', { ascending: false }).limit(orderLimit + 1);
+      if (orderBefore) ordersQuery = ordersQuery.lt('created_at', orderBefore);
+      const [{ data: listings, error: listingError }, { data: levels, error: levelError }, { data: incidents, error: incidentError }, { data: attempts, error: attemptError }, { data: refunds, error: refundError }, { data: allocations, error: allocationError }, { data: orderRows, error: orderError }, { data: dispositions, error: dispositionError }] = await Promise.all([
         admin.from('product_venue_listings').select('*, access_products(id, product_key, name, inventory_policy)').eq('venue_id', venueId).order('created_at'),
         locationIds.length ? admin.from('inventory_levels').select('*, product_variants(id, product_id, sku, title, status)').in('location_id', locationIds).order('updated_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
         locationIds.length ? admin.from('inventory_incidents').select('*, inventory_levels!inner(location_id, variant_id)').in('inventory_levels.location_id', locationIds).order('opened_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
@@ -3247,14 +3255,38 @@ const commerceHandler = async (req: Request) => {
         locationIds.length ? admin.from('inventory_allocations')
           .select('*, commerce_order_lines(id, product_name, sku, quantity, collected_quantity, cancelled_quantity, fulfillment_status, variant_snapshot), commerce_orders(id, status, guest_name, stripe_payment_intent_id, booking_receipts!commerce_orders_booking_receipt_id_fkey(receipt_number))')
           .in('location_id', locationIds).order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+        ordersQuery,
+        locationIds.length ? admin.from('commerce_physical_dispositions')
+          .select('id, commerce_order_id, commerce_order_line_id, allocation_id, refund_id, variant_id, location_id, outcome, quantity, reason, created_at')
+          .in('location_id', locationIds).order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
       ]);
-      const operationError = listingError || levelError || incidentError || attemptError || refundError || allocationError;
+      const operationError = listingError || levelError || incidentError || attemptError || refundError || allocationError || orderError || dispositionError;
       if (operationError) throw new Error(operationError.message);
+      const hasMoreOrders = (orderRows || []).length > orderLimit;
+      const orders = (orderRows || []).slice(0, orderLimit);
+      const orderIds = orders.map((order: any) => order.id);
+      const { data: orderLines, error: orderLineError } = orderIds.length
+        ? await admin.from('commerce_order_lines')
+          .select('id, commerce_order_id, product_id, product_key, product_name, commerce_kind, quantity, unit_price_minor, discount_minor, line_total_inc_vat_minor, vat_rate, vat_amount_minor, line_total_ex_vat_minor, fulfillment_type, fulfillment_status, fulfilled_at, variant_id, sku, inventory_policy, pickup_location_id, variant_snapshot, collected_quantity, cancelled_quantity, created_at')
+          .in('commerce_order_id', orderIds).order('sort_order').order('created_at')
+        : { data: [], error: null };
+      if (orderLineError) throw new Error(orderLineError.message);
+      const linesByOrder = new Map<string, any[]>();
+      for (const line of orderLines || []) {
+        const lines = linesByOrder.get(line.commerce_order_id) || [];
+        lines.push(line);
+        linesByOrder.set(line.commerce_order_id, lines);
+      }
       const levelIds = (levels || []).map((level: any) => level.id);
-      const { data: movements, error: movementError } = locationIds.length
-        ? await admin.from('inventory_movements').select('*').in('location_id', locationIds).order('occurred_at', { ascending: false }).limit(200)
+      let movementQuery = admin.from('inventory_movements').select('*')
+        .in('location_id', locationIds).order('occurred_at', { ascending: false }).limit(movementLimit + 1);
+      if (movementBefore) movementQuery = movementQuery.lt('occurred_at', movementBefore);
+      const { data: movementRows, error: movementError } = locationIds.length
+        ? await movementQuery
         : { data: [], error: null };
       if (movementError) throw new Error(movementError.message);
+      const hasMoreMovements = (movementRows || []).length > movementLimit;
+      const movements = (movementRows || []).slice(0, movementLimit);
       return jsonResponse({
         locations: locations || [], listings: listings || [],
         levels: (levels || []).map((level: any) => ({
@@ -3262,6 +3294,16 @@ const commerceHandler = async (req: Request) => {
           available_to_sell: Number(level.on_hand) - Number(level.reserved) - Number(level.allocated),
         })),
         movements: movements || [], incidents: incidents || [], attempts: attempts || [], refunds: refunds || [], allocations: allocations || [],
+        dispositions: dispositions || [],
+        orders: orders.map((order: any) => ({ ...order, lines: linesByOrder.get(order.id) || [] })),
+        orders_page: {
+          has_more: hasMoreOrders,
+          next_before: hasMoreOrders ? orders[orders.length - 1]?.created_at || null : null,
+        },
+        movements_page: {
+          has_more: hasMoreMovements,
+          next_before: hasMoreMovements ? movements[movements.length - 1]?.occurred_at || null : null,
+        },
         reconciliation: {
           checked_level_count: levelIds.length,
           formula: 'on_hand - reserved - allocated',

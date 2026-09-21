@@ -26,6 +26,9 @@ vi.mock("@/components/admin/AdminLeague", () => ({
     <div data-testid="canonical-league-editor">league:{props.leagueSeasonId || "new"}</div>
   ),
 }));
+vi.mock("@/components/admin/commerce/AdminCommerceWorkspace", () => ({
+  default: (props: { initialSection?: string }) => <div data-testid="admin-commerce-workspace">commerce:{props.initialSection}</div>,
+}));
 
 const format = {
   id: "format-course",
@@ -167,6 +170,12 @@ describe("Admin OS Catalog V1", () => {
     expect(screen.getByTestId("catalog-offer-type-picker")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Event/ }));
     expect(screen.getByTestId("canonical-managed-series-editor")).toHaveTextContent("catalog:new:social_event");
+  });
+
+  it("opens Products inside Admin OS Catalog instead of the legacy settings module", async () => {
+    renderCatalog();
+    fireEvent.click(await screen.findByRole("button", { name: "Produkter" }));
+    expect(screen.getByTestId("admin-commerce-workspace")).toHaveTextContent("commerce:products");
   });
 
   it("classifies lifecycle state without using presentation type as behavior", () => {

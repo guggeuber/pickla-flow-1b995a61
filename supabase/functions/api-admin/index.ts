@@ -3998,16 +3998,49 @@ async function analyzeOperationImpact(
 }
 
 async function decorateAdminProducts(admin: any, venueId: string, products: any[]) {
-  const [{ data: venue, error: venueError }, { data: relationships, error: relationshipsError }] = await Promise.all([
-    admin.from('venues').select('slug, commerce_enabled').eq('id', venueId).maybeSingle(),
+  const productIds = products.map((product) => product.id);
+  const [{ data: venue, error: venueError }, { data: relationships, error: relationshipsError }, variantResult, listingResult] = await Promise.all([
+    admin.from('venues').select('slug, commerce_enabled, tracked_merch_sales_enabled').eq('id', venueId).maybeSingle(),
     admin.from('product_relationships').select('target_product_id').eq('venue_id', venueId).eq('is_active', true),
+    productIds.length
+      ? admin.from('product_variants').select('id, product_id, status').in('product_id', productIds)
+      : Promise.resolve({ data: [], error: null }),
+    productIds.length
+      ? admin.from('product_venue_listings')
+        .select('id, product_id, status, tracked_sales_enabled, default_inventory_location_id, inventory_locations(name, status)')
+        .eq('venue_id', venueId).in('product_id', productIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (venueError) throw new Error(venueError.message);
   if (relationshipsError) throw new Error(relationshipsError.message);
+  if (variantResult.error) throw new Error(variantResult.error.message);
+  if (listingResult.error) throw new Error(listingResult.error.message);
+  const variants = variantResult.data || [];
+  const listings = listingResult.data || [];
+  const variantIds = variants.map((variant: any) => variant.id);
+  const locationIds = listings.map((listing: any) => listing.default_inventory_location_id).filter(Boolean);
+  const { data: levels, error: levelError } = variantIds.length && locationIds.length
+    ? await admin.from('inventory_levels')
+      .select('variant_id, location_id, on_hand, reserved, allocated, incident_blocked')
+      .in('variant_id', variantIds).in('location_id', locationIds)
+    : { data: [], error: null };
+  if (levelError) throw new Error(levelError.message);
   const relatedProductIds = new Set((relationships || []).map((row: any) => row.target_product_id));
   const venueCommerceEnabled = venue?.commerce_enabled === true;
 
   return products.map((product) => {
+    const productVariants = variants.filter((variant: any) => variant.product_id === product.id);
+    const listing = listings.find((candidate: any) => candidate.product_id === product.id) || null;
+    const productVariantIds = new Set(productVariants.map((variant: any) => variant.id));
+    const productLevels = (levels || []).filter((level: any) => productVariantIds.has(level.variant_id)
+      && (!listing || level.location_id === listing.default_inventory_location_id));
+    const inventorySummary = productLevels.reduce((summary: any, level: any) => ({
+      on_hand: summary.on_hand + Number(level.on_hand || 0),
+      reserved: summary.reserved + Number(level.reserved || 0),
+      allocated: summary.allocated + Number(level.allocated || 0),
+      available_to_sell: summary.available_to_sell + Number(level.on_hand || 0) - Number(level.reserved || 0) - Number(level.allocated || 0),
+      incident_blocked: summary.incident_blocked || level.incident_blocked === true,
+    }), { on_hand: 0, reserved: 0, allocated: 0, available_to_sell: 0, incident_blocked: false });
     const hasActiveRelationship = relatedProductIds.has(product.id);
     const store = evaluateCommerceAvailability(product, {
       channel: 'standalone',
@@ -4022,6 +4055,9 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
       channel: 'participation',
       venueCommerceEnabled,
     });
+    const trackedGateEnabled = product.inventory_policy !== 'tracked'
+      || (venue?.tracked_merch_sales_enabled === true && listing?.tracked_sales_enabled === true);
+    const effectiveStoreEligible = store.eligible && trackedGateEnabled;
     const isParticipation = product.commerce_kind === 'participation';
     const intendedFailures = [
       isParticipation && !participation.eligible ? participation : null,
@@ -4033,28 +4069,49 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
       ? 'Utkast'
       : product.status === 'archived'
         ? 'Arkiverad'
-        : store.eligible && addon.eligible
+          : effectiveStoreEligible && addon.eligible
           ? 'Aktiv - butik och aktivitet'
-          : store.eligible
+          : effectiveStoreEligible
             ? 'Aktiv - säljs i butik'
             : addon.eligible
               ? 'Aktiv - aktivitetstillval'
               : participation.eligible
                 ? 'Aktiv'
-                : relevantFailure?.code === 'venue_disabled'
+                : product.inventory_policy === 'tracked' && !trackedGateEnabled
+                  ? 'Aktiv - spårad försäljning avstängd'
+                  : relevantFailure?.code === 'venue_disabled'
                   ? 'Försäljning blockerad: Pickla Store är inte aktiverad för denna anläggning'
                   : 'Aktiv - inte öppen för försäljning';
 
     return {
       ...product,
       venue_commerce_enabled: venueCommerceEnabled,
-      store_eligible: store.eligible,
+      store_eligible: effectiveStoreEligible,
       activity_addon_eligible: addon.eligible,
       sales_state_label: salesStateLabel,
-      sales_block_reason: product.status === 'active' && relevantFailure
-        ? relevantFailure?.message || 'Produkten är inte öppen för försäljning.'
-        : null,
-      store_path: store.eligible && venue?.slug ? `/shop?v=${encodeURIComponent(venue.slug)}` : null,
+      sales_block_reason: product.status === 'active' && product.inventory_policy === 'tracked' && !trackedGateEnabled
+        ? 'Spårad försäljning kräver separat aktiveringsgranskning.'
+        : product.status === 'active' && relevantFailure
+          ? relevantFailure?.message || 'Produkten är inte öppen för försäljning.'
+          : null,
+      store_path: effectiveStoreEligible && venue?.slug ? `/shop?v=${encodeURIComponent(venue.slug)}` : null,
+      variant_count: productVariants.length,
+      active_variant_count: productVariants.filter((variant: any) => variant.status === 'active').length,
+      listing: listing ? {
+        id: listing.id,
+        status: listing.status,
+        tracked_sales_enabled: listing.tracked_sales_enabled === true,
+        default_inventory_location_id: listing.default_inventory_location_id,
+        location_name: Array.isArray(listing.inventory_locations)
+          ? listing.inventory_locations[0]?.name || null
+          : listing.inventory_locations?.name || null,
+      } : null,
+      inventory_summary: {
+        ...inventorySummary,
+        configured: productLevels.length > 0,
+        sold_out: product.inventory_policy === 'tracked' && productVariants.length > 0 && inventorySummary.available_to_sell <= 0,
+        low_stock: product.inventory_policy === 'tracked' && inventorySummary.available_to_sell > 0 && inventorySummary.available_to_sell <= 5,
+      },
     };
   });
 }
