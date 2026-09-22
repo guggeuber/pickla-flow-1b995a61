@@ -30,6 +30,7 @@ import {
   type EntitlementFundingType,
 } from '../_shared/entitlements.ts';
 import { isUpstreamTransportError } from '../_shared/upstream_transport.ts';
+import { confirmCancellationAndDispatchRefund } from '../_shared/cancellation_execution.ts';
 import {
   optionalStripeRuntimeEnvironment,
   requireStripeRuntimeEnvironment,
@@ -277,27 +278,6 @@ async function retrieveStripeCheckoutSession(stripeKey: string, sessionId: strin
   return payload as StripeCheckoutSession;
 }
 
-async function createStripeRefund(stripeKey: string, paymentIntentId: string, orderId: string) {
-  requireStripeRuntimeEnvironment(stripeKey);
-  const body = new URLSearchParams({
-    payment_intent: paymentIntentId,
-    reason: 'requested_by_customer',
-    'metadata[commerce_order_id]': orderId,
-  });
-  const response = await fetch(`${STRIPE_API_BASE}/refunds`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${stripeKey}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Idempotency-Key': `commerce-cancel-${orderId}`,
-    },
-    body,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message || `Stripe API error ${response.status}`);
-  return payload as { id: string; status?: string };
-}
-
 async function createTrackedStripeRefund(stripeKey: string, input: {
   paymentIntentId: string;
   orderId: string;
@@ -521,32 +501,93 @@ async function loadOrderLines(admin: AdminClient, orderId: string): Promise<DbRe
   return (data || []) as DbRecord[];
 }
 
-async function cancelActivityRegistrationParticipation(admin: AdminClient, input: {
-  registrationId: string;
-  orderId?: string | null;
-  actorUserId?: string | null;
-  source: 'customer' | 'staff' | 'system' | 'stripe_refund' | 'repair';
-  reason: string;
-  requestId: string;
-  refundId?: string | null;
-  requestedAt?: string;
-}) {
-  const { data, error } = await admin.rpc('cancel_activity_registration_participation', {
-    p_registration_id: input.registrationId,
-    p_order_id: input.orderId || null,
-    p_actor_user_id: input.actorUserId || null,
-    p_source: input.source,
-    p_reason: input.reason,
-    p_request_id: input.requestId,
-    p_refund_id: input.refundId || null,
-    p_requested_at: input.requestedAt || new Date().toISOString(),
-  });
-  if (error) throw new Error(error.message);
-  const result = Array.isArray(data) ? data[0] : data;
-  if (!result || result.registration_status !== 'cancelled') {
-    throw new Error('Activity participation cancellation did not complete');
+async function attachCancellationPolicySnapshots(
+  admin: AdminClient,
+  order: DbRecord,
+  resolvedLines: DbRecord[],
+  userId: string | null,
+  customerId: string | null,
+) {
+  for (const line of resolvedLines.filter((item) => item.commerce_kind === 'participation')) {
+    if (line.cancellation_policy_snapshot_id) continue;
+    let policyFamily: 'occurrence_ticket' | 'managed_course' | 'league_team' | 'event';
+    let startAt: string | null = null;
+    let registrationCloseAt: string | null = null;
+
+    if (line.league_team_entry_id) {
+      policyFamily = 'league_team';
+      const { data: series, error } = await admin.from('activity_series')
+        .select('id, start_date, start_time, registration_closes_at')
+        .eq('id', line.activity_series_id).maybeSingle();
+      if (error || !series) throw new Error(error?.message || 'Cancellation policy series anchor missing');
+      startAt = DateTime.fromISO(
+        `${series.start_date}T${String(series.start_time || '00:00:00').slice(0, 8)}`,
+        { zone: 'Europe/Stockholm' },
+      ).toUTC().toISO();
+      registrationCloseAt = series.registration_closes_at || null;
+    } else if (line.activity_series_id) {
+      const { data: series, error } = await admin.from('activity_series')
+        .select('id, format_id, start_date, start_time, registration_closes_at')
+        .eq('id', line.activity_series_id).maybeSingle();
+      if (error || !series) throw new Error(error?.message || 'Cancellation policy series anchor missing');
+      const { data: format, error: formatError } = series.format_id
+        ? await admin.from('activity_formats').select('presentation_type').eq('id', series.format_id).maybeSingle()
+        : { data: null, error: null };
+      if (formatError) throw new Error(formatError.message);
+      policyFamily = ['social_event', 'tournament'].includes(String(format?.presentation_type || ''))
+        ? 'event'
+        : 'managed_course';
+      startAt = DateTime.fromISO(
+        `${series.start_date}T${String(series.start_time || '00:00:00').slice(0, 8)}`,
+        { zone: 'Europe/Stockholm' },
+      ).toUTC().toISO();
+      registrationCloseAt = series.registration_closes_at || null;
+    } else {
+      policyFamily = 'occurrence_ticket';
+      const { data: activity, error } = await admin.from('activity_sessions')
+        .select('id, start_time, end_time')
+        .eq('id', line.activity_session_id).maybeSingle();
+      if (error || !activity) throw new Error(error?.message || 'Cancellation policy occurrence anchor missing');
+      const interval = activitySessionOccurrenceInterval(line.session_date, activity.start_time, activity.end_time);
+      if (!interval) throw new Error('Cancellation policy occurrence anchor is invalid');
+      startAt = interval.start.toUTC().toISO();
+    }
+    if (!startAt) throw new Error('Cancellation policy start anchor missing');
+
+    const resolver = (line.resolver_snapshot || {}) as DbRecord;
+    const { data, error } = await admin.rpc('create_cancellation_policy_snapshot', {
+      p_venue_id: order.venue_id,
+      p_policy_family: policyFamily,
+      p_purchase_reference_type: 'commerce_order_line',
+      p_purchase_reference_id: line.id,
+      p_start_at: startAt,
+      p_registration_close_at: registrationCloseAt,
+      p_access_product_id: line.product_id || null,
+      p_activity_series_id: line.activity_series_id || null,
+      p_event_id: null,
+      p_payer_user_id: userId || order.user_id || null,
+      p_payer_customer_id: customerId || order.customer_id || null,
+      p_payment_provenance: {
+        commerce_order_id: order.id,
+        commerce_order_line_id: line.id,
+        amount_minor: Number(line.unit_price_minor || 0) * Number(line.quantity || 1),
+        currency: order.currency || 'SEK',
+      },
+      p_funding_provenance: {
+        access_decision: resolver.access_decision || null,
+        entitlement_type: resolver.entitlement_type || null,
+        source_entitlement_id: resolver.source_entitlement_id || null,
+        funding_type: resolver.funding_type || null,
+        funder: resolver.funder || null,
+        consumption_required: resolver.consumption_required === true,
+        meter_type: resolver.consumption_required === true ? 'occurrences' : 'unlimited',
+      },
+    }).maybeSingle();
+    const snapshot = data as { id?: string } | null;
+    if (error || !snapshot?.id) throw new Error(error?.message || 'Cancellation policy snapshot could not be created');
+    line.cancellation_policy_snapshot_id = snapshot.id;
   }
-  return result;
+  return resolvedLines;
 }
 
 function projectOrderLine(line: DbRecord) {
@@ -574,6 +615,7 @@ function projectOrderLine(line: DbRecord) {
     session_registration_id: line.session_registration_id,
     series_commitment_id: line.series_commitment_id,
     league_team_entry_id: line.league_team_entry_id,
+    cancellation_policy_snapshot_id: line.cancellation_policy_snapshot_id || null,
     dependent_participant_id: line.dependent_participant_id,
     parent_line_id: line.parent_line_id,
     inventory_policy: line.inventory_policy || 'stockless',
@@ -749,6 +791,31 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
       commitment_id: participation.series_commitment_id || null,
     } : null;
   }
+  let cancellationPolicy = null;
+  if (participation) {
+    if (participation.cancellation_policy_snapshot_id) {
+      const { data: snapshot, error: snapshotError } = await admin.from('cancellation_policy_snapshots')
+        .select('id,policy_key,policy_version,policy_family,provenance,rules,copy_sv,copy_en,cancel_deadline_at,refund_deadline_at')
+        .eq('id', participation.cancellation_policy_snapshot_id).maybeSingle();
+      if (snapshotError) throw new Error(snapshotError.message);
+      cancellationPolicy = snapshot ? { ...snapshot, source: 'purchase_snapshot' } : null;
+    } else {
+      const policyFamily = participation.league_team_entry_id
+        ? 'league_team'
+        : participation.activity_series_id
+          ? ['social_event', 'tournament'].includes(String(courseAccess?.presentation_type || '')) ? 'event' : 'managed_course'
+          : 'occurrence_ticket';
+      const { data: projection, error: projectionError } = await admin.rpc('cancellation_policy_public_projection', {
+        p_venue_id: order.venue_id,
+        p_policy_family: policyFamily,
+        p_access_product_id: participation.product_id || null,
+        p_activity_series_id: participation.activity_series_id || null,
+        p_event_id: null,
+      });
+      if (projectionError) throw new Error(projectionError.message);
+      cancellationPolicy = projection;
+    }
+  }
   return {
     order: {
       id: order.id,
@@ -781,6 +848,7 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
     activity_access: activityAccess,
     course_access: courseAccess,
     league_access: leagueAccess,
+    cancellation_policy: cancellationPolicy,
     ...(token ? { cart_token: token } : {}),
   };
 }
@@ -1508,6 +1576,7 @@ async function resolveLines(
       session_registration_id: line.session_registration_id,
       series_commitment_id: line.series_commitment_id,
       league_team_entry_id: line.league_team_entry_id,
+      cancellation_policy_snapshot_id: line.cancellation_policy_snapshot_id || null,
       dependent_participant_id: line.dependent_participant_id,
       parent_line_id: line.parent_line_id,
       variant_id: tracked ? variant.id : null,
@@ -3018,142 +3087,64 @@ const commerceHandler = async (req: Request) => {
       const body = await req.json();
       const reference = String(body.token || body.reference || '').trim();
       const order = await loadOrderByReference(admin, reference, userId, true);
-      if (order.status === 'cancelled') return jsonResponse(await cartResponse(admin, order), 200, 0);
+      if (!userId) return errorResponse('Logga in och koppla köpet till ditt konto innan avbokning.', 401);
       if (!['paid', 'attention'].includes(order.status)) return errorResponse('Köpet kan inte avbokas', 409);
       const lines = await loadOrderLines(admin, order.id);
       const participation = lines.find((line) => line.commerce_kind === 'participation');
-      const cancellationAlreadyRequested = Boolean(order.metadata?.cancellation_requested_at);
-      if (cancellationAlreadyRequested && (!participation?.activity_session_id || !participation.session_date)) {
-        return jsonResponse({ ...(await cartResponse(admin, order)), cancellation_pending: true }, 202, 0);
-      }
-      if (order.status === 'attention' && !cancellationAlreadyRequested) {
-        return errorResponse('Köpet behöver hanteras av Pickla innan det kan avbokas.', 409);
-      }
-      if (participation?.league_team_entry_id) {
-        const { data: team, error: teamError } = await admin.from('league_team_entries')
-          .select('id, status, league_season_id, league_seasons!inner(fixtures_published_at, activity_series!inner(start_date, start_time, registration_closes_at))')
-          .eq('id', participation.league_team_entry_id).maybeSingle();
-        const season = Array.isArray(team?.league_seasons) ? team?.league_seasons[0] : team?.league_seasons;
-        const series = Array.isArray(season?.activity_series) ? season?.activity_series[0] : season?.activity_series;
-        const starts = series ? DateTime.fromISO(`${series.start_date}T${String(series.start_time || '18:00').slice(0, 8)}`, { zone: 'Europe/Stockholm' }) : null;
-        if (teamError || !team || !season || !series) return errorResponse(teamError?.message || 'Seriespelet saknas', 404);
-        if (season.fixtures_published_at || DateTime.now().toUTC() >= DateTime.fromISO(series.registration_closes_at, { zone: 'utc' })
-          || !starts?.isValid || DateTime.now().setZone('Europe/Stockholm') >= starts) {
-          return errorResponse('Efter anmälningsstängning, schemapublicering eller seriestart hanteras lagavbokning manuellt av Pickla.', 409);
-        }
-        if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
-        const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
-        const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
-        const { data: pending, error: pendingError } = await admin.from('commerce_orders').update({
-          metadata: {
-            ...(order.metadata || {}),
-            cancellation_requested_at: order.metadata?.cancellation_requested_at || new Date().toISOString(),
-            cancellation_source: 'customer_team',
-            stripe_refund_id: refund.id,
-            league_team_entry_id: team.id,
-          },
-        }).eq('id', order.id).eq('status', 'paid').select('*').maybeSingle();
-        if (pendingError) throw new Error(pendingError.message);
-        return jsonResponse({ ...(await cartResponse(admin, pending || order)), cancellation_pending: true }, 202, 0);
-      }
-      if (participation?.activity_series_id) {
-        const { data: series, error: seriesError } = await admin.from('activity_series')
-          .select('id, start_date, start_time')
-          .eq('id', participation.activity_series_id)
-          .eq('venue_id', order.venue_id)
-          .eq('series_type', 'course')
-          .maybeSingle();
-        if (seriesError || !series) return errorResponse('Kursen saknas', 404);
-        const starts = DateTime.fromISO(`${series.start_date}T${String(series.start_time || '00:00').slice(0, 8)}`, { zone: 'Europe/Stockholm' });
-        if (!starts.isValid || DateTime.now().setZone('Europe/Stockholm') >= starts) {
-          return errorResponse('Kursen har redan startat och behöver hanteras manuellt.', 409);
-        }
-        if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
-        const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
-        const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
-        const { data: pending, error: pendingError } = await admin.from('commerce_orders').update({
-          metadata: {
-            ...(order.metadata || {}),
-            cancellation_requested_at: order.metadata?.cancellation_requested_at || new Date().toISOString(),
-            cancellation_source: 'customer',
-            stripe_refund_id: refund.id,
-          },
-        }).eq('id', order.id).in('status', ['paid', 'attention']).select('*').maybeSingle();
-        if (pendingError) throw new Error(pendingError.message);
-        return jsonResponse({ ...(await cartResponse(admin, pending || order)), cancellation_pending: true }, 202, 0);
-      }
-      if (!participation?.activity_session_id || !participation.session_date) {
-        return errorResponse('Endast aktivitetsköp kan avbokas här', 409);
-      }
-      if (!participation.session_registration_id) {
-        return errorResponse('Aktivitetsanmälan saknas', 409);
-      }
-
-      const cancellationRequestId = req.headers.get('x-request-id') || crypto.randomUUID();
-      if (cancellationAlreadyRequested) {
-        await cancelActivityRegistrationParticipation(admin, {
-          registrationId: String(participation.session_registration_id),
-          orderId: order.id,
-          actorUserId: userId,
-          source: 'customer',
-          reason: 'customer_self_service_before_activity_start',
-          requestId: cancellationRequestId,
-          refundId: String(order.metadata?.stripe_refund_id || ''),
-          requestedAt: String(order.metadata?.cancellation_requested_at || new Date().toISOString()),
-        });
-        const refreshed = await loadOrderByReference(admin, order.id, userId, true);
-        return jsonResponse({
-          ...(await cartResponse(admin, refreshed)),
-          cancellation_pending: true,
-          participation_cancelled: true,
-        }, 202, 0);
-      }
-
-      const { data: activity, error: activityError } = await admin.from('activity_sessions')
-        .select('id, start_time, end_time')
-        .eq('id', participation.activity_session_id)
-        .eq('venue_id', order.venue_id)
-        .maybeSingle();
-      if (activityError || !activity) return errorResponse('Aktiviteten saknas', 404);
-      const interval = activitySessionOccurrenceInterval(participation.session_date, activity.start_time, activity.end_time);
-      if (!interval || DateTime.now().setZone('Europe/Stockholm') >= interval.start) {
-        return errorResponse('Aktiviteten har redan startat', 409);
-      }
-
-      if (Number(order.total_inc_vat_minor || 0) === 0) {
-        await cancelActivityRegistrationParticipation(admin, {
-          registrationId: String(participation.session_registration_id),
-          orderId: order.id,
-          actorUserId: userId,
-          source: 'customer',
-          reason: 'customer_self_service_before_activity_start',
-          requestId: cancellationRequestId,
-        });
-        const cancelled = await loadOrderByReference(admin, order.id, userId, true);
-        return jsonResponse({
-          ...(await cartResponse(admin, cancelled)),
-          participation_cancelled: true,
-        }, 200, 0);
-      }
-
-      if (!order.stripe_payment_intent_id) return errorResponse('Betalningsreferens saknas', 409);
-      const stripeKey = requireStripeRuntimeEnvironment().stripeKey;
-      const refund = await createStripeRefund(stripeKey, order.stripe_payment_intent_id, order.id);
-      await cancelActivityRegistrationParticipation(admin, {
-        registrationId: String(participation.session_registration_id),
-        orderId: order.id,
-        actorUserId: userId,
-        source: 'customer',
-        reason: 'customer_self_service_before_activity_start',
-        requestId: cancellationRequestId,
-        refundId: refund.id,
+      const subject = participation?.league_team_entry_id
+        ? { type: 'league_team_entry', id: String(participation.league_team_entry_id) }
+        : participation?.series_commitment_id
+          ? { type: 'series_commitment', id: String(participation.series_commitment_id) }
+          : participation?.session_registration_id
+            ? { type: 'activity_registration', id: String(participation.session_registration_id) }
+            : null;
+      if (!subject) return errorResponse('Köpet saknar ett kanoniskt avbokningsobjekt', 409);
+      const { data: preview, error: previewError } = await admin.rpc('cancellation_subject_state', {
+        p_subject_type: subject.type,
+        p_subject_id: subject.id,
+        p_actor_user_id: userId,
+        p_staff_override: false,
+        p_now: new Date().toISOString(),
+        p_staff_refund_choice: 'policy',
+        p_staff_restore_choice: 'policy',
       });
-      const pending = await loadOrderByReference(admin, order.id, userId, true);
+      if (previewError) return errorResponse(previewError.message, 409);
+
+      // Compatibility rollout: an old client may continue only when the V1
+      // consequence is materially identical to the former endpoint (paid =
+      // full refund, free = no monetary refund). Deliberate policy changes
+      // require the new preview/confirmation UI instead of surprising users.
+      const legacyRefundMode = Number(order.total_inc_vat_minor || 0) > 0 ? 'automatic_full' : 'none';
+      if (preview?.allowed !== true || preview?.refund_mode !== legacyRefundMode) {
+        const { payer_user_id: _payerUserId, payer_customer_id: _payerCustomerId,
+          stripe_payment_intent_id: _paymentIntentId, ...safePreview } = preview || {};
+        return jsonResponse({
+          code: 'cancellation_policy_confirmation_required',
+          error: 'Avbokningskonsekvensen måste bekräftas i den uppdaterade Pickla-vyn.',
+          mismatch_classification: 'EXPECTED_POLICY_CHANGE',
+          preview: safePreview,
+        }, 409, 0);
+      }
+
+      const runtime = requireStripeRuntimeEnvironment();
+      const result = await confirmCancellationAndDispatchRefund({
+        admin,
+        subjectType: subject.type,
+        subjectId: subject.id,
+        actorUserId: userId,
+        expectedRevision: preview.state_revision,
+        requestId: req.headers.get('x-request-id') || crypto.randomUUID(),
+        stripeKey: runtime.stripeKey,
+        stripeMode: runtime.stripeMode,
+      });
+      const refreshed = await loadOrderByReference(admin, order.id, userId, true);
       return jsonResponse({
-        ...(await cartResponse(admin, pending)),
-        cancellation_pending: true,
+        ...(await cartResponse(admin, refreshed)),
+        cancellation_policy_v1: true,
         participation_cancelled: true,
-      }, 202, 0);
+        refund_status: result.refundStatus,
+        refund_processing: result.refundProcessing,
+      }, result.refundProcessing ? 202 : 200, 0);
     }
 
     if (req.method === 'POST' && path === 'resolve') {
@@ -3363,6 +3354,8 @@ const commerceHandler = async (req: Request) => {
           };
         }
       }
+
+      await attachCancellationPolicySnapshots(admin, order, resolved, userId || null, customerId);
 
       const hasTrackedInventory = resolved.some((line) => line.inventory_policy === 'tracked');
       if (hasTrackedInventory && participation.length > 0) return errorResponse('tracked_activity_addon_unsupported', 409);

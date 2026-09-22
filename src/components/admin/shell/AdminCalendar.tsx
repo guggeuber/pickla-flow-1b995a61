@@ -984,13 +984,13 @@ function AdminCalendarDay({ venueId, onOpenModule, onOpenCatalog }: Props) {
               </p>
               {Number(confirmCancel.registrations_count || 0) > 0 && (
                 <p className="mt-3 text-xs font-bold" style={{ color: ax("danger") }}>
-                  ⚠ {confirmCancel.registrations_count} anmälda kommer att meddelas.
+                  ⚠ {confirmCancel.registrations_count} aktiva deltagare. Passet kan inte avbokas här förrän deltagarna och deras ekonomiska konsekvenser hanteras explicit.
                 </p>
               )}
             </div>
             <button
               onClick={() => activityOverride.mutate({ item: confirmCancel, status: "cancelled" })}
-              disabled={activityOverride.isPending}
+              disabled={activityOverride.isPending || Number(confirmCancel.registrations_count || 0) > 0}
               className="flex w-full items-center justify-center gap-2 rounded-2xl py-4 font-display text-sm font-black disabled:opacity-50"
               style={{ background: ax("danger"), color: "white" }}
             >
@@ -999,7 +999,7 @@ function AdminCalendarDay({ venueId, onOpenModule, onOpenCatalog }: Props) {
               ) : (
                 <Ban className="h-4 w-4" />
               )}
-              Ja, avboka passet
+              {Number(confirmCancel.registrations_count || 0) > 0 ? "Organizer cancellation krävs" : "Ja, avboka passet"}
             </button>
             <button
               onClick={() => setConfirmCancel(null)}

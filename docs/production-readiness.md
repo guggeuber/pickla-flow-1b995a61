@@ -173,3 +173,24 @@ Release order and stage smoke:
 - Confirm one `today-personalized` request and no `today-primary` or retired personalized batch request for an authenticated first render; then open the same activity drawer and confirm zero additional personalized requests.
 - Activate/cancel access and confirm the next Today request uses a new generation and replaces the prior price. Complete one Stripe test checkout and one included-access registration to confirm checkout authority and fulfillment remain unchanged.
 - Record `authenticated-today-personalized-timing` diagnostics, including total time, schedule time, access-snapshot query count, occurrence count, and resolver count. Do not promote until the stage latency and physical iOS PWA checks meet the release budget.
+
+## Gate 11: Cancellation Policy V1
+
+Pass criteria:
+
+- Every new migrated sale freezes a deterministic, immutable cancellation-policy snapshot. Missing policy configuration fails the new sale closed.
+- Customer preview and confirmation use one server-authoritative decision. A changed decision returns `409` and requires confirmation of the new consequence.
+- Accepted cancellation releases participation/capacity exactly once before any provider call. Refund failure never resurrects participation.
+- Automatic refunds use the existing durable Commerce R2A machinery and reconcile idempotently to the frozen payer/payment provenance.
+- Checked-in customer self-cancellation is blocked; staff override is explicit, scoped, reasoned, and audited.
+- Organizer hide/cancel fails closed while active participants remain and reports affected participant count and safely known paid amount.
+- Existing ambiguous records retain explicit legacy behavior; new terms are never fabricated for historical purchases.
+- Membership subscription cancellation, merchandise returns, and organizer batch resolution remain named separate follow-ups.
+
+Release order and stage smoke:
+
+- Apply `20260922120000_cancellation_policy_v1.sql`, reload the PostgREST schema, then deploy `api-cancellations`, `api-commerce`, `api-commerce-recovery`, `api-bookings`, `api-stripe-webhook`, and `api-admin` with `--no-verify-jwt` before releasing the frontend.
+- On stage `anpxxnpevtxhiajxmfji` with Stripe TEST, certify both sides of the 12h, 24h, 48h, and league-close boundaries, both event presets, co-player payer separation, entitlement restoration, checked-in blocking/staff override, Policy A/B snapshots, delayed/failed refunds, duplicate confirmation, and concurrent final-place replacement.
+- Record stage identity, migration/schema/function evidence, provider objects, timings, shadow mismatches, ambiguous legacy count, and zero production writes.
+
+Reference: [cancellation-policy-v1.md](./cancellation-policy-v1.md)

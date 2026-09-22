@@ -57,6 +57,27 @@ vi.mock("sonner", () => ({
   toast: { error: mocks.toastError, info: mocks.toastInfo },
 }));
 
+const testCancellationPolicy = {
+  policy_key: "standard_12h",
+  policy_version: 1,
+  policy_family: "occurrence_ticket",
+  provenance: "test",
+  source: "Open Play default",
+  rules: { refund_cutoff_hours: 12 },
+  copy_sv: {
+    title: "Standard 12h",
+    summary: "Full återbetalning fram till 12 timmar före start.",
+    late: "Ingen återbetalning efter gränsen.",
+    boundary: "Strikt före gränsen.",
+  },
+  copy_en: {
+    title: "Standard 12h",
+    summary: "Full refund until 12 hours before start.",
+    late: "No refund after the cutoff.",
+    boundary: "Strictly before the cutoff.",
+  },
+};
+
 function renderCart(path = `/cart?token=${"x".repeat(32)}`) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -105,6 +126,7 @@ beforeEach(() => {
       fulfillment_type: "participation",
       fulfillment_status: "pending",
     }],
+    cancellation_policy: testCancellationPolicy,
   });
 });
 
@@ -173,6 +195,7 @@ describe("program purchase request UI guard", () => {
           debug: { base_amount_sek: 165 },
         },
       }],
+      cancellation_policy: testCancellationPolicy,
     };
     mocks.fetchOrder.mockResolvedValue(includedOrder);
     mocks.apiPost.mockImplementation(async (_fn: string, endpoint: string) => {

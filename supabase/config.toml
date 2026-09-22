@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.api-commerce-recovery]
 verify_jwt = false
+
+[functions.api-cancellations]
+verify_jwt = false

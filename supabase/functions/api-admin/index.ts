@@ -6020,11 +6020,26 @@ Deno.serve(async (req) => {
 
       const counts = await activityRegistrationCounts(admin, [activitySessionId], sessionDate, sessionDate);
       const registrationsCount = counts.get(activityOverrideKey(activitySessionId, sessionDate)) || 0;
-      if (registrationsCount > 0 && body.confirm !== true) {
+      if (registrationsCount > 0 && ['hidden', 'cancelled'].includes(status)) {
+        const { data: affectedRegistrations, error: affectedError } = await admin
+          .from('session_registrations')
+          .select('id,price_paid_sek')
+          .eq('venue_id', requestedVenueId)
+          .eq('activity_session_id', activitySessionId)
+          .eq('session_date', sessionDate)
+          .in('status', ['confirmed', 'checked_in', 'no_show']);
+        if (affectedError) return errorResponse(affectedError.message, 500);
+        const affectedPaidAmountSek = (affectedRegistrations || []).reduce(
+          (sum: number, registration: { price_paid_sek?: number | null }) =>
+            sum + Math.max(Number(registration.price_paid_sek || 0), 0),
+          0,
+        );
         return jsonResponse({
-          requires_confirmation: true,
+          organizer_cancellation_blocked: true,
           registrations_count: registrationsCount,
-          message: 'Activity occurrence has registrations. Confirm before changing visibility.',
+          affected_paid_amount_sek: affectedPaidAmountSek,
+          affected_paid_amount_source: 'session_registrations.price_paid_sek',
+          message: 'Aktiviteten har deltagare och kan inte döljas eller ställas in här. Använd ett separat organizer cancellation-flöde där varje deltagare och ekonomisk konsekvens hanteras explicit.',
         }, 409);
       }
 

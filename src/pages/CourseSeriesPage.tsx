@@ -6,6 +6,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
+import CancellationPolicyNotice from "@/components/CancellationPolicyNotice";
 import { useAuth } from "@/hooks/useAuth";
 import { createCourseCart, fetchCourseDetail } from "@/lib/courses";
 import { formatCommerceMoney } from "@/lib/commerce";
@@ -183,6 +184,14 @@ export default function CourseSeriesPage() {
           <p className="text-sm font-black uppercase tracking-[0.08em] text-[#ed3f8f]">{price.primary}</p>
           {personalizationFailed ? <p className="mt-1 text-sm font-semibold text-red-700">Visar offentligt pris. Ditt personliga pris kunde inte hämtas.</p> : !personalizationReady ? <p className="mt-1 text-sm font-semibold text-slate-500">Medlemspris kontrolleras efter verifiering…</p> : selectedParticipantPricePending ? <p className="mt-1 text-sm font-semibold text-slate-600">Priset bekräftas för deltagaren i nästa steg.</p> : price.context ? <p className="mt-1 text-sm font-semibold text-slate-600">{price.context}</p> : null}
         </section>
+
+        <CancellationPolicyNotice
+          className="mt-4"
+          venueId={course.venue?.id}
+          family={socialEvent ? "event" : "managed_course"}
+          productId={course.product?.id}
+          seriesId={course.id}
+        />
 
         {presentation.type === "course" && sessions.length ? <section className="mt-8" data-testid="course-occurrences">
           <h2 className="text-sm font-black uppercase tracking-[0.16em] text-slate-500">Dina tillfällen</h2>

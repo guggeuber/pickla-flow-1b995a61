@@ -1818,6 +1818,7 @@ async function handleCourtBooking(
       participation_funding_source_type: includedHoursPerCourt > 0 ? 'membership_entitlement' : 'stripe_payment',
       participation_funding_source_id: includedHoursPerCourt > 0 ? (meta.membership_id || null) : session.id,
       participation_funder: includedHoursPerCourt > 0 ? 'subscription' : 'self_prepaid',
+      cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
     }));
 
   try {
@@ -2068,6 +2069,7 @@ async function handleDayPass(
         early_bird_price_minor: meta.early_bird_price_minor || null,
         early_bird_slots: meta.early_bird_slots || null,
         early_bird_remaining_at_checkout: meta.early_bird_remaining_at_checkout || null,
+        cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
       },
       p_hold_id: meta.capacity_hold_id || null,
     });
@@ -2224,6 +2226,7 @@ async function handleActivityTicket(
     p_metadata: {
       session_type: kind,
       session_name: meta.session_name || null,
+      cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
     },
     p_hold_id: meta.capacity_hold_id || null,
   });

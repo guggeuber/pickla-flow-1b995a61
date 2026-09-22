@@ -183,7 +183,10 @@ async function processRefund(admin: ReturnType<typeof getServiceClient>, stripeK
   }
   if (Boolean(providerRefund?.livemode) !== (refund.provider_environment === 'live')
     || String(providerRefund?.metadata?.commerce_refund_id || '') !== String(refund.id)
-    || String(providerRefund?.metadata?.commerce_order_id || '') !== String(refund.commerce_order_id)
+    || (refund.commerce_order_id
+      && String(providerRefund?.metadata?.commerce_order_id || '') !== String(refund.commerce_order_id))
+    || (refund.cancellation_decision_id
+      && String(providerRefund?.metadata?.cancellation_decision_id || '') !== String(refund.cancellation_decision_id))
     || String(providerRefund?.payment_intent || '') !== String(refund.provider_request?.payment_intent || '')
     || Number(providerRefund?.amount || 0) !== Number(refund.amount_inc_vat_minor || 0)) {
     throw new Error('Recovered Stripe refund does not match durable refund command');

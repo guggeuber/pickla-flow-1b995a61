@@ -150,6 +150,7 @@ export default function CommerceCartPage() {
   }, [socialPreferences.data?.should_show_first_booking_info]);
   const activity = orderQuery.data?.activity_access;
   const course = orderQuery.data?.course_access;
+  const cancellationPolicy = orderQuery.data?.cancellation_policy;
   const coursePresentation = seriesPresentation(course?.presentation_type);
   const courseTitle = course ? seriesCustomerTitle({ seriesName: course.name, formatName: course.format_name, presentationType: course.presentation_type }) : "";
   const courseOccurrenceSummary = course
@@ -161,6 +162,7 @@ export default function CommerceCartPage() {
     ? DateTime.fromISO(activity.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("cccc d MMMM")
     : "";
   const serverPricingReady = resolveQuery.isSuccess && !resolveQuery.isError;
+  const policyReady = !hasParticipation || Boolean(cancellationPolicy);
 
   useEffect(() => {
     if (!standaloneShopCart || cartUpdatesPending > 0) return;
@@ -410,6 +412,16 @@ export default function CommerceCartPage() {
             <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-post" type="email" className="h-12 rounded-xl border border-black/15 px-3 text-base outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950" />
           </section>
         ) : null}
+        {hasParticipation ? cancellationPolicy ? (
+          <section className="rounded-2xl border border-black/10 bg-slate-50 p-4">
+            <p className="text-xs font-black">{cancellationPolicy.copy_sv.title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">{cancellationPolicy.copy_sv.summary}</p>
+          </section>
+        ) : (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs font-semibold text-amber-900">
+            Köpet saknar ett publicerat avbokningsvillkor och kan inte slutföras.
+          </section>
+        ) : null}
         {resolveQuery.isError ? <p className="mt-6 border-t border-black/15 pt-5 text-sm font-semibold text-slate-700">Priset eller platsen kunde inte bekräftas. Gå tillbaka och försök igen.</p> : null}
       </main>
       {(!standaloneShopCart || visibleLines.length > 0) ? <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-black/10 bg-white px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3">
@@ -421,7 +433,7 @@ export default function CommerceCartPage() {
           ) : null}
           <div className="mb-1 flex items-center justify-between"><span className="text-sm text-slate-500">Totalt</span><span className="text-2xl font-black">{serverPricingReady ? formatCommerceMoney(total) : "—"}</span></div>
           {totalSavings > 0 ? <p className="mb-3 text-sm font-bold text-slate-700">Du sparar {formatCommerceMoney(totalSavings)}</p> : null}
-          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || cartUpdatesPending > 0 || !serverPricingReady || needsEmail || visibleItemCount === 0} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending || cartUpdatesPending > 0 ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{serverPricingReady ? standaloneShopCart ? `Till kassan · ${formatCommerceMoney(total)}` : `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
+          <button type="button" onClick={() => checkout.mutate()} disabled={checkout.isPending || cartUpdatesPending > 0 || !serverPricingReady || !policyReady || needsEmail || visibleItemCount === 0} className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 text-base font-black text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100">{checkout.isPending || cartUpdatesPending > 0 ? <Loader2 className="h-5 w-5 animate-spin" /> : null}{!policyReady ? "Avbokningsvillkor saknas" : serverPricingReady ? standaloneShopCart ? `Till kassan · ${formatCommerceMoney(total)}` : `Betala ${formatCommerceMoney(total)}` : "Kontrollerar pris…"}</button>
         </div>
       </footer> : null}
     </div>

@@ -6,6 +6,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
+import CancellationPolicyNotice from "@/components/CancellationPolicyNotice";
 import { useAuth } from "@/hooks/useAuth";
 import { canonicalAppUrl } from "@/lib/canonicalOrigin";
 import { formatCommerceMoney } from "@/lib/commerce";
@@ -133,6 +134,14 @@ export default function LeaguePage() {
           <div><p className="text-xs font-black uppercase tracking-wide text-[#b41663]">Lagpris · båda spelarna</p>{league.pricing_reason === "early_bird" ? <p className="mt-1 text-xs font-bold text-slate-500">Early Bird · första {league.product.early_bird_slots} lag</p> : league.pricing_reason === "membership_tier_pricing" ? <p className="mt-1 text-xs font-bold text-slate-500">Medlemspris{league.membership_tier_name ? ` · ${league.membership_tier_name}` : ""}</p> : null}</div>
           <div className="text-right"><p className="text-xl font-black">{formatCommerceMoney(league.current_price_minor)}</p>{league.pricing_reason !== "league_team_base_price" ? <p className="text-xs text-slate-400 line-through">{formatCommerceMoney(league.product.base_price_sek * 100)}</p> : null}</div>
         </section>
+
+        <CancellationPolicyNotice
+          className="mt-4"
+          venueId={venue?.id}
+          family="league_team"
+          productId={league.product?.id}
+          seriesId={league.series.id}
+        />
 
         <section className="mt-6 grid gap-3 border-y border-black/10 py-5 text-sm font-bold">
           <p className="flex items-center gap-3"><CalendarDays className="h-5 w-5" /> Torsdagar · 18:00–20:00{firstNight ? ` · start ${svDate(firstNight)}` : ""}</p>

@@ -37,13 +37,25 @@ BEGIN
   END;
 END $$;
 
+SELECT (public.create_cancellation_policy_snapshot(
+  'c1000000-0000-4000-8000-000000000002',
+  'occurrence_ticket',
+  'commerce_order_line',
+  'c1000000-0000-4000-8000-000000000101',
+  '2031-01-15T18:00:00Z'
+)).id AS cancellation_policy_snapshot_id;
+
 SELECT * FROM public.freeze_commerce_order(
   'c1000000-0000-4000-8000-000000000010', 2,
-  '[
+  jsonb_set('[
     {"id":"c1000000-0000-4000-8000-000000000101","product_key":"open_play_slot","product_name":"Open Play","commerce_kind":"participation","quantity":1,"unit_price_minor":16500,"discount_minor":0,"vat_rate":6,"fulfillment_type":"participation","resolver_snapshot":{"source":"test"}},
     {"id":"c1000000-0000-4000-8000-000000000102","product_key":"rental_racket","product_name":"Hyrrack","commerce_kind":"rental","quantity":1,"unit_price_minor":5000,"discount_minor":0,"vat_rate":6,"fulfillment_type":"desk_pickup","resolver_snapshot":{"source":"test"}},
     {"id":"c1000000-0000-4000-8000-000000000103","product_key":"pink_pickla_bag","product_name":"Pink Pickla Bag","commerce_kind":"merchandise","quantity":1,"unit_price_minor":20000,"discount_minor":0,"vat_rate":25,"fulfillment_type":"desk_pickup","resolver_snapshot":{"source":"test"}}
-  ]'::jsonb
+  ]'::jsonb, '{0,cancellation_policy_snapshot_id}', to_jsonb((
+    SELECT id::TEXT FROM public.cancellation_policy_snapshots
+    WHERE purchase_reference_type='commerce_order_line'
+      AND purchase_reference_id='c1000000-0000-4000-8000-000000000101'
+  )))
 );
 SELECT public.attach_commerce_order_stripe_session(
   'c1000000-0000-4000-8000-000000000010', 3, 'cs_test_commerce_415'

@@ -199,11 +199,11 @@ export default function AdminVenueOperations({ venueId }: { venueId: string }) {
 
   const applyActivityOverride = (activity: ImpactActivity, status: "active" | "hidden" | "cancelled") => {
     const registrationsCount = Number(activity.registrations_count || 0);
-    const confirm = status === "active" || registrationsCount === 0
-      ? true
-      : window.confirm(`${activity.name} har ${registrationsCount} anmälda. Vill du fortsätta?`);
-    if (!confirm) return;
-    activityOverride.mutate({ activity, status, confirm });
+    if (status !== "active" && registrationsCount > 0) {
+      toast.error(`${activity.name} har ${registrationsCount} aktiva deltagare. Hantera dem i ett explicit organizer cancellation-flöde först.`);
+      return;
+    }
+    activityOverride.mutate({ activity, status, confirm: true });
   };
 
   return (

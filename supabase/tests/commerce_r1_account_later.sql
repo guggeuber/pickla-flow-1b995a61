@@ -104,6 +104,7 @@ DECLARE
   v_hold_id UUID;
   v_hold_id_retry UUID;
   v_registration_id UUID;
+  v_cancellation_snapshot_id UUID;
 BEGIN
   SELECT hold_id INTO v_hold_id FROM public.acquire_capacity_hold(
     'c2a00000-0000-4000-8000-000000000002', 'activity_session',
@@ -119,10 +120,20 @@ BEGIN
   ) WHERE ok;
   IF v_hold_id IS NULL OR v_hold_id <> v_hold_id_retry THEN RAISE EXCEPTION 'hold was not idempotent'; END IF;
 
+  SELECT id INTO v_cancellation_snapshot_id
+  FROM public.create_cancellation_policy_snapshot(
+    'c2a00000-0000-4000-8000-000000000002', 'occurrence_ticket',
+    'commerce_order_line', 'c2a00000-0000-4000-8000-000000000211',
+    '2026-08-01T18:00:00+02:00', NULL, NULL, NULL, NULL, NULL,
+    'c2a00000-0000-4000-8000-000000000201',
+    '{"provider":"stripe","payment_intent_id":"pi_test_r1_guest"}'::jsonb,
+    '{"kind":"money"}'::jsonb
+  );
+
   PERFORM * FROM public.freeze_commerce_order(
     'c2a00000-0000-4000-8000-000000000210', 2,
     jsonb_build_array(
-      jsonb_build_object('id','c2a00000-0000-4000-8000-000000000211','product_key','r1_open_play','product_name','Open Play','commerce_kind','participation','quantity',1,'unit_price_minor',16500,'discount_minor',0,'vat_rate',6,'fulfillment_type','participation','capacity_hold_id',v_hold_id),
+      jsonb_build_object('id','c2a00000-0000-4000-8000-000000000211','product_key','r1_open_play','product_name','Open Play','commerce_kind','participation','quantity',1,'unit_price_minor',16500,'discount_minor',0,'vat_rate',6,'fulfillment_type','participation','capacity_hold_id',v_hold_id,'cancellation_policy_snapshot_id',v_cancellation_snapshot_id),
       jsonb_build_object('id','c2a00000-0000-4000-8000-000000000212','product_key','rental_racket','product_name','Hyrrack','commerce_kind','rental','quantity',1,'unit_price_minor',5000,'discount_minor',0,'vat_rate',6,'fulfillment_type','desk_pickup')
     )
   );

@@ -153,6 +153,7 @@ export interface CommerceOrderLine {
   variant_snapshot?: ({ title?: string | null; options?: CommerceVariantOption[] } & Record<string, unknown>) | null;
   collected_quantity?: number;
   cancelled_quantity?: number;
+  cancellation_policy_snapshot_id?: string | null;
 }
 
 export interface CommerceOrderResponse {
@@ -180,6 +181,20 @@ export interface CommerceOrderResponse {
   lines: CommerceOrderLine[];
   receipt?: Record<string, unknown> | null;
   receipt_lines?: CommerceOrderLine[];
+  cancellation_policy?: {
+    id?: string;
+    policy_key: string;
+    policy_version?: number | null;
+    version?: number | null;
+    policy_family?: string;
+    provenance?: string;
+    source?: string;
+    rules: Record<string, unknown>;
+    copy_sv: { title: string; summary: string; late: string; boundary: string };
+    copy_en: { title: string; summary: string; late: string; boundary: string };
+    cancel_deadline_at?: string | null;
+    refund_deadline_at?: string | null;
+  } | null;
   cart_token?: string;
   activity_access?: {
     activity_session_id: string;

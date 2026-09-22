@@ -18,6 +18,7 @@ functions=(
   api-auth
   api-bookings
   api-checkins
+  api-cancellations
   api-commerce
   api-commerce-recovery
   api-corporate

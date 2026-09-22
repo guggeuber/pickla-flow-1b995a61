@@ -11,6 +11,7 @@ import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTim
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { BookingParticipantSummary, type BookingParticipantSummaryData } from "@/components/bookings/BookingParticipantSummary";
 import { bookingParticipantCustomerCopy, bookingParticipantStateView } from "@/lib/bookingParticipantState";
+import { cancellationDecisionCopy, confirmCancellation, fetchCancellationPreview, type CancellationDecision } from "@/lib/cancellationPolicy";
 
 const FONT_GROTESK = "'Space Grotesk', sans-serif";
 const FONT_MONO = "'Space Mono', monospace";
@@ -56,6 +57,7 @@ export default function BookingParticipantTicketPage() {
   const { user, loading: authLoading } = useAuth();
   const [checkingIn, setCheckingIn] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery<ParticipantTicketResponse>({
     queryKey: ["booking-participant-ticket", token, user?.id || "guest"],
@@ -94,6 +96,13 @@ export default function BookingParticipantTicketPage() {
   const participantCopy = data?.participant ? bookingParticipantCustomerCopy(data.participant) : null;
   const hasPlace = participantState?.hasPlace === true;
   const needsAuth = !user;
+  const cancellationPreview = useQuery<CancellationDecision>({
+    queryKey: ["cancellation-preview", "booking_participant", data?.participant?.id, user?.id],
+    enabled: Boolean(user?.id && data?.participant?.id && hasPlace),
+    staleTime: 0,
+    queryFn: () => fetchCancellationPreview("booking_participant", data!.participant.id),
+  });
+  const cancellationCopy = cancellationPreview.data ? cancellationDecisionCopy(cancellationPreview.data) : null;
 
   const goToAuth = () => {
     const currentPath = `${window.location.pathname}${window.location.search}`;
@@ -123,16 +132,19 @@ export default function BookingParticipantTicketPage() {
   };
 
   const handleCancel = async () => {
-    if (!token) return;
+    if (!cancellationPreview.data) return;
     if (!user) return goToAuth();
     setCancelling(true);
     try {
-      const result = await apiPost<{ refund_note?: string | null }>("api-bookings", "booking-participant-cancel", { token });
-      toast.success(result.refund_note || "Din plats är avbokad");
+      const result = await confirmCancellation(cancellationPreview.data);
+      toast.success(result.refund_processing ? "Platsen är släppt. Återbetalningen behandlas." : "Din plats är avbokad");
+      setConfirmCancel(false);
       await refetch();
       queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
     } catch (err: any) {
-      toast.error(err?.message || "Kunde inte avboka platsen");
+      setConfirmCancel(false);
+      await cancellationPreview.refetch();
+      toast.error(err?.message || "Konsekvensen ändrades. Kontrollera det uppdaterade beskedet.");
     } finally {
       setCancelling(false);
     }
@@ -258,16 +270,22 @@ export default function BookingParticipantTicketPage() {
                 <MessageCircle className="h-5 w-5" />
                 Gå till chatt
               </button>
-              {data.ticket.can_cancel ? (
-                <button
-                  onClick={handleCancel}
-                  disabled={cancelling}
-                  className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-red-100 bg-white px-5 py-4 text-sm font-black text-red-500 disabled:opacity-50"
-                  style={{ fontFamily: FONT_GROTESK }}
-                >
-                  {cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
-                  Avboka min plats
+              {cancellationPreview.isLoading ? <div className="flex justify-center py-3"><Loader2 className="h-4 w-4 animate-spin" /></div> : cancellationPreview.data?.allowed && cancellationCopy ? confirmCancel ? (
+                <div className="rounded-3xl border border-red-100 bg-red-50 p-4">
+                  <p className="text-sm font-black" style={{ fontFamily: FONT_GROTESK }}>{cancellationCopy.title}</p>
+                  <p className="mt-1 text-xs leading-relaxed text-neutral-600" style={{ fontFamily: FONT_MONO }}>{cancellationCopy.outcome}</p>
+                  <p className="mt-1 text-xs text-neutral-500" style={{ fontFamily: FONT_MONO }}>Platsen blir tillgänglig direkt.</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => setConfirmCancel(false)} className="h-11 rounded-full border border-neutral-200 bg-white text-xs font-black">Behåll plats</button>
+                    <button type="button" onClick={handleCancel} disabled={cancelling} className="flex h-11 items-center justify-center rounded-full bg-red-500 px-3 text-center text-xs font-black text-white disabled:opacity-50">{cancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : cancellationCopy.confirmLabel}</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => setConfirmCancel(true)} className="inline-flex w-full items-center justify-center gap-3 rounded-full border border-red-100 bg-white px-5 py-4 text-sm font-black text-red-500" style={{ fontFamily: FONT_GROTESK }}>
+                  <X className="h-4 w-4" />{cancellationCopy.confirmLabel}
                 </button>
+              ) : cancellationPreview.data && cancellationCopy ? (
+                <div className="rounded-3xl bg-neutral-50 p-4 text-xs text-neutral-600" style={{ fontFamily: FONT_MONO }}>{cancellationCopy.outcome}</div>
               ) : null}
             </div>
           )}

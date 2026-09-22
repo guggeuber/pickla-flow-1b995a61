@@ -18,7 +18,6 @@ import {
   getBookingChatResourceId,
   getBookingCourtLabel,
   getBookingCourtNamesLabel,
-  getBookingIds,
 } from "@/lib/bookingGroups";
 import { subscribeToPush } from "@/lib/push";
 import { activityCheckInAvailable, activityTimingLabel } from "@/lib/activityTiming";
@@ -32,10 +31,12 @@ import { bookingHasConversation, buildBookingHistory, formatBookingHistoryTime }
 import { bookingParticipantCustomerCopy, bookingParticipantStateView } from "@/lib/bookingParticipantState";
 import { useMyBookings } from "@/hooks/useMyBookings";
 import {
-  cancelCommerceActivityOrder,
-  fetchCommerceRegistrationManagement,
-  type CommerceRegistrationManagementState,
-} from "@/lib/commerce";
+  cancellationDecisionCopy,
+  confirmCancellation,
+  fetchCancellationPreview,
+  type CancellationDecision,
+  type CancellationSubjectType,
+} from "@/lib/cancellationPolicy";
 import { useMyCourses } from "@/hooks/useMyCourses";
 import { useMySessionRegistrations, type MySessionRegistration } from "@/hooks/useMySessionRegistrations";
 import { occurrenceProgressLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
@@ -799,10 +800,21 @@ function BookingDetailsSheet({
   const inviteRequestRef = useRef<Promise<string> | null>(null);
   const bookingRef = booking?.primary_booking_ref || booking?.booking_ref || booking?.bookings?.[0]?.booking_ref || null;
   const bookingDrawerKey = booking ? getBookingDrawerKey(booking) : null;
-  const isParticipantPlace = Boolean((booking as any)?.is_participant_place || (booking as any)?.participant);
-  const bookingRowsForOpen = Array.isArray((booking as any)?.bookings) ? (booking as any).bookings : booking ? [booking] : [];
+  const isParticipantPlace = Boolean(booking?.is_participant_place || booking?.participant);
+  const bookingRowsForOpen = Array.isArray(booking?.bookings) ? booking.bookings : booking ? [booking] : [];
+  const cancellationParticipant = booking?.participant || null;
+  const cancellationSubjectType: CancellationSubjectType = isParticipantPlace ? "booking_participant" : "court_booking";
+  const cancellationSubjectId = isParticipantPlace
+    ? cancellationParticipant?.id || null
+    : bookingRowsForOpen[0]?.id || booking?.id || null;
   const openBookingSource = bookingRowsForOpen.find((row: any) => row?.open_for_more_status === "open") || bookingRowsForOpen[0] || {};
   const openForMoreActive = openBookingSource?.open_for_more_status === "open";
+  const cancellationQuery = useQuery<CancellationDecision>({
+    queryKey: ["cancellation-preview", cancellationSubjectType, cancellationSubjectId, user?.id],
+    enabled: open && !!user?.id && !!cancellationSubjectId,
+    retry: false,
+    queryFn: () => fetchCancellationPreview(cancellationSubjectType, cancellationSubjectId!),
+  });
 
   useEffect(() => {
     inviteUrlRef.current = null;
@@ -887,7 +899,6 @@ function BookingDetailsSheet({
     (!isParticipantPlace ? participants.find((row: any) => row?.role === "booker") : null);
   const courtName = getBookingCourtLabel(booking);
   const courtNames = getBookingCourtNamesLabel(booking);
-  const bookingIds = getBookingIds(booking);
   const start = new Date(booking.start_time);
   const end = new Date(booking.end_time);
   const startSthlm = DateTime.fromISO(booking.start_time, { zone: "utc" }).setZone("Europe/Stockholm");
@@ -933,14 +944,17 @@ function BookingDetailsSheet({
     ? "Bekräfta plats"
     : "Slutför betalningen";
   const participantCanCancel = personalHasPlace || ["payment_pending", "payment_expired", "confirmation_pending", "identity_pending"].includes(String(personalState?.state || ""));
+  const cancellationPreview = cancellationQuery.data || null;
+  const cancellationCopy = cancellationPreview ? cancellationDecisionCopy(cancellationPreview) : null;
 
   const handleCancel = async () => {
-    if (!bookingIds.length) return;
+    if (!cancellationQuery.data) return;
     setCancelling(true);
     try {
-      await apiPost("api-bookings", "cancel", { bookingIds });
-      toast.success("Bokningen är avbokad");
+      const result = await confirmCancellation(cancellationQuery.data);
+      toast.success(result.refund_processing ? "Bokningen är avbokad · återbetalningen behandlas" : "Bokningen är avbokad");
       await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.invalidateQueries({ queryKey: ["cancellation-preview"] });
       await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
       onOpenChange(false);
       setConfirmCancel(false);
@@ -971,14 +985,13 @@ function BookingDetailsSheet({
   };
 
   const handleCancelParticipant = async () => {
-    if (!participant?.id) return;
+    if (!participant?.id || !cancellationQuery.data) return;
     setCancelling(true);
     try {
-      const result = await apiPost<{ refund_note?: string | null }>("api-bookings", "booking-participant-cancel", {
-        participantId: participant.id,
-      });
-      toast.success(result.refund_note || "Din plats är avbokad");
+      const result = await confirmCancellation(cancellationQuery.data);
+      toast.success(result.refund_processing ? "Din plats är avbokad · återbetalningen behandlas" : "Din plats är avbokad");
       await queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
+      await queryClient.invalidateQueries({ queryKey: ["cancellation-preview"] });
       await queryClient.refetchQueries({ queryKey: ["my-bookings"] });
       onOpenChange(false);
       setConfirmCancel(false);
@@ -1315,16 +1328,17 @@ function BookingDetailsSheet({
                 Visa kvitto
               </button>
             )}
-            {(!isParticipantPlace || participantCanCancel) && (confirmCancel ? (
+            {(!isParticipantPlace || participantCanCancel) && cancellationQuery.isLoading ? (
+              <div className="flex w-full items-center justify-center gap-2 rounded-xl py-3 text-xs font-bold" style={{ background: PAGE_BG, color: TEXT_MUTED }}>
+                <Loader2 className="h-4 w-4 animate-spin" /> Hämtar avbokningsvillkor…
+              </div>
+            ) : (!isParticipantPlace || participantCanCancel) && cancellationPreview?.allowed && cancellationCopy && (confirmCancel ? (
               <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                <p className="text-xs text-center" style={{ color: TEXT_SECONDARY }}>
-                  {isParticipantPlace ? "Säker på att du vill avboka din plats?" : "Säker på att du vill avboka?"}
-                </p>
-                {isParticipantPlace && participant?.payment_status === "paid" && (
-                  <p className="text-[11px] text-center" style={{ color: TEXT_MUTED }}>
-                    Kontakta oss för återbetalning.
-                  </p>
-                )}
+                <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>{cancellationCopy.title}</p>
+                <p className="text-xs" style={{ color: TEXT_SECONDARY }}>{cancellationCopy.outcome}</p>
+                {cancellationCopy.cancelDeadline && <p className="text-[11px]" style={{ color: TEXT_MUTED }}>{cancellationCopy.cancelDeadline}</p>}
+                {cancellationCopy.refundDeadline && <p className="text-[11px]" style={{ color: TEXT_MUTED }}>{cancellationCopy.refundDeadline}</p>}
+                <p className="text-[11px] font-bold" style={{ color: TEXT_MUTED }}>Platsen eller banan släpps direkt och väntar inte på återbetalningen.</p>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setConfirmCancel(false)}
@@ -1339,7 +1353,7 @@ function BookingDetailsSheet({
                     className="flex-1 py-2.5 rounded-lg text-xs font-bold text-white disabled:opacity-50 flex items-center justify-center"
                     style={{ background: "#EF4444", fontFamily: FONT_HEADING }}
                   >
-                    {cancelling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Ja, avboka"}
+                    {cancelling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : cancellationCopy.confirmLabel}
                   </button>
                 </div>
               </div>
@@ -1352,6 +1366,12 @@ function BookingDetailsSheet({
                 {isParticipantPlace ? "Avboka min plats" : "Avboka"}
               </button>
             ))}
+            {(!isParticipantPlace || participantCanCancel) && cancellationPreview && !cancellationPreview.allowed && cancellationCopy ? (
+              <div className="rounded-xl border px-3 py-3 text-center" style={{ borderColor: CARD_BORDER, background: PAGE_BG }}>
+                <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>Avbokning inte tillgänglig</p>
+                <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>{cancellationCopy.outcome}</p>
+              </div>
+            ) : null}
           </div>
         </div>
         </div>
@@ -1381,29 +1401,28 @@ function SessionRegistrationDetailsSheet({
   const [openingLobby, setOpeningLobby] = useState(false);
   const [confirmCancellation, setConfirmCancellation] = useState(false);
   useEffect(() => setConfirmCancellation(false), [open, registration?.id]);
-  const cancellationQuery = useQuery({
-    queryKey: ["commerce-registration-order", registration?.id, user?.id],
+  const cancellationQuery = useQuery<CancellationDecision>({
+    queryKey: ["cancellation-preview", "activity_registration", registration?.id, user?.id],
     enabled: open && !!registration?.id && !!user?.id,
     retry: false,
-    queryFn: () => fetchCommerceRegistrationManagement(registration!.id),
+    queryFn: () => fetchCancellationPreview("activity_registration", registration!.id),
   });
   const cancellationMutation = useMutation({
     mutationFn: () => {
-      const orderId = cancellationQuery.data?.order_id;
-      if (!orderId) throw new Error("Ordern kunde inte hittas");
-      return cancelCommerceActivityOrder(orderId);
+      if (!cancellationQuery.data) throw new Error("Avbokningsbeslutet kunde inte hämtas");
+      return confirmCancellation(cancellationQuery.data);
     },
     onSuccess: async (result) => {
       setConfirmCancellation(false);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["commerce-registration-order", registration?.id, user?.id] }),
+        queryClient.invalidateQueries({ queryKey: ["cancellation-preview"] }),
         queryClient.invalidateQueries({ queryKey: ["my-session-registrations", user?.id] }),
         queryClient.invalidateQueries({ queryKey: ["commerce-my-orders"] }),
         queryClient.invalidateQueries({ queryKey: ["my-receipts", user?.id] }),
         queryClient.invalidateQueries({ queryKey: ["my-passes", user?.id] }),
         queryClient.invalidateQueries({ queryKey: ["access-snapshot"] }),
       ]);
-      toast.success(result.cancellation_pending ? "Återbetalningen har startat" : "Aktiviteten är avbokad");
+      toast.success(result.refund_processing ? "Aktiviteten är avbokad · återbetalningen behandlas" : "Aktiviteten är avbokad");
     },
     onError: async (error: unknown) => {
       setConfirmCancellation(false);
@@ -1477,18 +1496,15 @@ function SessionRegistrationDetailsSheet({
   });
   const money = (amount: number) =>
     `${Number(amount || 0).toLocaleString("sv-SE", { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })} kr`;
-  const cancellationState: CommerceRegistrationManagementState = cancellationQuery.data?.state || "unmanaged";
-  const canCancelCommerceRegistration = cancellationQuery.data?.available === true
-    && ["paid", "free"].includes(cancellationState);
-  const cancellationBlocksCheckIn = ["refund_pending", "refunded", "cancelled", "attention"].includes(cancellationState);
-  const cancellationStatus = ({
-    refund_pending: { label: "Avbokad · Återbetalning pågår", detail: "Platsen är släppt. Återbetalningen behandlas separat av Stripe." },
-    refunded: { label: "Återbetald", detail: "Platsen är avbokad och betalningen återförd." },
-    cancelled: { label: "Avbokad", detail: "Platsen är inte längre aktiv." },
-    started: { label: "Avbokning stängd", detail: "Aktiviteten har redan startat." },
-    attention: { label: "Vi hjälper dig", detail: "Köpet behöver hanteras av Pickla. Kontakta oss så löser vi det." },
-    pending: { label: "Köpet behandlas", detail: "Vänta tills köpet är bekräftat innan du avbokar." },
-  } as Partial<Record<CommerceRegistrationManagementState, { label: string; detail: string }>>)[cancellationState];
+  const cancellationPreview = cancellationQuery.data || null;
+  const cancellationCopy = cancellationPreview ? cancellationDecisionCopy(cancellationPreview) : null;
+  const canCancelCommerceRegistration = cancellationPreview?.allowed === true && !cancellationPreview.already_cancelled;
+  const cancellationBlocksCheckIn = registration.status === "cancelled" || cancellationPreview?.already_cancelled === true;
+  const cancellationStatus = registration.status === "cancelled"
+    ? { label: "Avbokad", detail: "Platsen är inte längre aktiv." }
+    : cancellationPreview && !cancellationPreview.allowed && cancellationCopy
+      ? { label: "Avbokning stängd", detail: cancellationCopy.outcome }
+      : null;
 
   const handleOpenLobby = async () => {
     if (openingLobby) return;
@@ -1654,14 +1670,15 @@ function SessionRegistrationDetailsSheet({
             </button>
             {canCancelCommerceRegistration ? confirmCancellation ? (
               <div className="col-span-2 rounded-xl border p-3" style={{ borderColor: CARD_BORDER, background: PAGE_BG }}>
-                <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>Avboka din plats?</p>
-                <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>
-                  {cancellationState === "paid" ? "Betalningen återförs när Stripe har bekräftat återbetalningen." : "Platsen släpps direkt."}
-                </p>
+                <p className="text-sm font-bold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>{cancellationCopy?.title || "Avboka din plats?"}</p>
+                <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>{cancellationCopy?.outcome}</p>
+                {cancellationCopy?.cancelDeadline ? <p className="mt-1 text-[11px]" style={{ color: TEXT_MUTED }}>{cancellationCopy.cancelDeadline}</p> : null}
+                {cancellationCopy?.refundDeadline ? <p className="mt-1 text-[11px]" style={{ color: TEXT_MUTED }}>{cancellationCopy.refundDeadline}</p> : null}
+                <p className="mt-1 text-[11px] font-bold" style={{ color: TEXT_MUTED }}>Platsen släpps direkt och väntar inte på återbetalningen.</p>
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <button type="button" onClick={() => setConfirmCancellation(false)} disabled={cancellationMutation.isPending} className="h-10 rounded-lg border text-xs font-bold" style={{ borderColor: CARD_BORDER, color: TEXT_PRIMARY }}>Behåll</button>
                   <button type="button" onClick={() => cancellationMutation.mutate()} disabled={cancellationMutation.isPending} className="flex h-10 items-center justify-center rounded-lg bg-slate-950 text-xs font-bold text-white disabled:opacity-50">
-                    {cancellationMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ja, avboka"}
+                    {cancellationMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : cancellationCopy?.confirmLabel || "Ja, avboka"}
                   </button>
                 </div>
               </div>
@@ -2484,6 +2501,90 @@ function LegalLinksSection() {
   );
 }
 
+function ManagedSeriesCancellationControl({
+  subjectType,
+  subjectId,
+  label,
+}: {
+  subjectType: "series_commitment" | "league_team_entry";
+  subjectId: string;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const queryClient = useQueryClient();
+  const preview = useQuery<CancellationDecision>({
+    queryKey: ["cancellation-preview", subjectType, subjectId],
+    enabled: open,
+    staleTime: 0,
+    queryFn: () => fetchCancellationPreview(subjectType, subjectId),
+  });
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!preview.data) throw new Error("Avbokningsbeslutet kunde inte hämtas");
+      return confirmCancellation(preview.data);
+    },
+    onSuccess: async (result) => {
+      toast.success(result.refund_processing ? "Platsen är släppt. Återbetalningen behandlas." : "Platsen är avbokad.");
+      setOpen(false);
+      setConfirming(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["my-courses"] }),
+        queryClient.invalidateQueries({ queryKey: ["my-leagues"] }),
+        queryClient.invalidateQueries({ queryKey: ["cancellation-preview"] }),
+      ]);
+    },
+    onError: async () => {
+      setConfirming(false);
+      await preview.refetch();
+      toast.error("Konsekvensen har ändrats eller avbokningen kunde inte genomföras. Kontrollera det uppdaterade beskedet.");
+    },
+  });
+  const decisionCopy = preview.data ? cancellationDecisionCopy(preview.data) : null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpen(true); }}
+        className="mt-3 text-xs font-bold underline decoration-black/20 underline-offset-4"
+        style={{ color: TEXT_SECONDARY }}
+      >
+        {label}
+      </button>
+      <Drawer open={open} onOpenChange={(next) => { setOpen(next); if (!next) setConfirming(false); }}>
+        <DrawerContent className="px-5 pb-[calc(env(safe-area-inset-bottom,0px)+24px)]">
+          <div className="mx-auto w-full max-w-md py-5">
+            {preview.isLoading ? <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 animate-spin" /></div> : preview.isError ? (
+              <p className="rounded-xl p-4 text-sm" style={{ background: "#FEF2F2", color: "#B91C1C" }}>Avbokningsvillkoret kunde inte hämtas.</p>
+            ) : decisionCopy && preview.data ? (
+              <div>
+                <p className="text-lg font-bold" style={{ color: TEXT_PRIMARY, fontFamily: FONT_HEADING }}>{decisionCopy.title}</p>
+                <p className="mt-2 text-sm" style={{ color: TEXT_SECONDARY }}>{decisionCopy.outcome}</p>
+                <p className="mt-2 text-sm" style={{ color: TEXT_SECONDARY }}>Hela platsen släpps direkt. Historik över tidigare tillfällen bevaras.</p>
+                {decisionCopy.cancelDeadline ? <p className="mt-3 text-xs" style={{ color: TEXT_MUTED }}>{decisionCopy.cancelDeadline}</p> : null}
+                {decisionCopy.refundDeadline ? <p className="mt-1 text-xs" style={{ color: TEXT_MUTED }}>{decisionCopy.refundDeadline}</p> : null}
+                {!preview.data.allowed ? (
+                  <p className="mt-5 rounded-xl p-4 text-sm font-semibold" style={{ background: PAGE_BG, color: TEXT_SECONDARY }}>{decisionCopy.outcome}</p>
+                ) : confirming ? (
+                  <div className="mt-6 grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => setConfirming(false)} disabled={mutation.isPending} className="h-12 rounded-xl border text-sm font-bold" style={{ borderColor: CARD_BORDER }}>Behåll platsen</button>
+                    <button type="button" onClick={() => mutation.mutate()} disabled={mutation.isPending} className="flex h-12 items-center justify-center rounded-xl bg-slate-950 px-3 text-center text-sm font-bold text-white disabled:opacity-50">
+                      {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : decisionCopy.confirmLabel}
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setConfirming(true)} className="mt-6 h-12 w-full rounded-xl bg-slate-950 text-sm font-bold text-white">Visa slutlig bekräftelse</button>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </>
+  );
+}
+
 const MyPage = () => {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
@@ -2740,7 +2841,8 @@ const MyPage = () => {
                     ? DateTime.fromISO(next.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("ccc d MMM")
                     : null;
                   return (
-                    <Link key={course.commitment.id} to={`/course/${course.series.id}?v=${encodeURIComponent(venueSlug)}`} className="rounded-xl p-4 text-left active:scale-[0.98] transition-transform" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                    <div key={course.commitment.id} className="rounded-xl p-4 text-left" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                      <Link to={`/course/${course.series.id}?v=${encodeURIComponent(venueSlug)}`} className="block active:scale-[0.98] transition-transform">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{customerTitle}</p>
@@ -2751,7 +2853,9 @@ const MyPage = () => {
                         </div>
                         <span className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>{presentation.hideSingleOccurrenceCount && course.total_sessions === 1 ? presentation.label : occurrenceProgressLabel(Math.min(course.completed_sessions + 1, course.total_sessions), course.total_sessions)}</span>
                       </div>
-                    </Link>
+                      </Link>
+                      <ManagedSeriesCancellationControl subjectType="series_commitment" subjectId={course.commitment.id} label="Hantera kursplats" />
+                    </div>
                   );
                 })}
               </div>
@@ -2769,9 +2873,12 @@ const MyPage = () => {
                   const nextDate = league.next_session
                     ? DateTime.fromISO(league.next_session.session_date, { zone: "Europe/Stockholm" }).setLocale("sv").toFormat("ccc d MMM")
                     : null;
-                  return <Link key={league.membership.id} to={`/seriespel/${league.series.id}?v=${encodeURIComponent(venueSlug)}`} className="rounded-xl p-4 text-left active:scale-[0.98] transition-transform" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
-                    <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{league.series.name}</p><p className="mt-1 text-xs font-black uppercase tracking-wide" style={{ color: "#ed3f8f" }}>Lag · {league.team.team_name}</p><p className="mt-2 text-xs" style={{ color: TEXT_MUTED }}>{nextDate ? `Nästa: ${nextDate} · ${String(league.next_session?.start_time || "18:00").slice(0, 5)}` : "Säsongen är avslutad"}</p>{league.next_fixtures.length ? <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>{league.next_fixtures.map((fixture) => { const time = DateTime.fromISO(fixture.scheduled_start_at).setZone("Europe/Stockholm").toFormat("HH:mm"); const court = fixture.court_name ? ` · ${fixture.court_name}` : ""; const opponent = fixture.opponent_team_name ? ` mot ${fixture.opponent_team_name}` : ""; return `${time}${court}${opponent}`; }).join(" · ")}</p> : null}</div>{league.standing ? <span className="shrink-0 rounded-full px-3 py-1 text-xs font-black" style={{ background: "#fff2f7", color: "#b41663" }}>#{league.standing.position}</span> : <span className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>SERIESPEL</span>}</div>
-                  </Link>;
+                  return <div key={league.membership.id} className="rounded-xl p-4 text-left" style={{ background: CARD_BG, border: `1.5px solid ${CARD_BORDER}` }}>
+                    <Link to={`/seriespel/${league.series.id}?v=${encodeURIComponent(venueSlug)}`} className="block active:scale-[0.98] transition-transform">
+                      <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-bold" style={{ color: TEXT_PRIMARY }}>{league.series.name}</p><p className="mt-1 text-xs font-black uppercase tracking-wide" style={{ color: "#ed3f8f" }}>Lag · {league.team.team_name}</p><p className="mt-2 text-xs" style={{ color: TEXT_MUTED }}>{nextDate ? `Nästa: ${nextDate} · ${String(league.next_session?.start_time || "18:00").slice(0, 5)}` : "Säsongen är avslutad"}</p>{league.next_fixtures.length ? <p className="mt-1 text-xs" style={{ color: TEXT_SECONDARY }}>{league.next_fixtures.map((fixture) => { const time = DateTime.fromISO(fixture.scheduled_start_at).setZone("Europe/Stockholm").toFormat("HH:mm"); const court = fixture.court_name ? ` · ${fixture.court_name}` : ""; const opponent = fixture.opponent_team_name ? ` mot ${fixture.opponent_team_name}` : ""; return `${time}${court}${opponent}`; }).join(" · ")}</p> : null}</div>{league.standing ? <span className="shrink-0 rounded-full px-3 py-1 text-xs font-black" style={{ background: "#fff2f7", color: "#b41663" }}>#{league.standing.position}</span> : <span className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold" style={{ background: BLUE_LIGHT, color: BLUE }}>SERIESPEL</span>}</div>
+                    </Link>
+                    {league.membership.role === "captain" ? <ManagedSeriesCancellationControl subjectType="league_team_entry" subjectId={league.team.id} label="Hantera laganmälan" /> : null}
+                  </div>;
                 })}
               </div>
             </motion.div>

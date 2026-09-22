@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { apiGet, apiPost } from "@/lib/api";
 import { calculateFounderCourtCoverage, formatFounderHours, founderAllowanceCopy } from "@/lib/founderBooking";
 import { PicklaTopBar } from "@/components/PicklaTopBar";
+import CancellationPolicyNotice from "@/components/CancellationPolicyNotice";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { preserveIntendedRoute } from "@/lib/entryResolver";
 import { groupTimesByDaypart, reconcileCourtSelection } from "@/lib/bookingSelection";
@@ -1136,6 +1137,12 @@ export default function BookingPage() {
                       </p>
                     )
                   )}
+
+                  <CancellationPolicyNotice
+                    className="mt-5 text-left"
+                    venueId={data?.venue?.id}
+                    family="court_booking"
+                  />
 
                   <button
                     type="submit"

@@ -78,6 +78,31 @@ function seedMyPageQueries(queryClient: QueryClient, input: {
       paid: false,
       policy: "before_activity_start",
     });
+    queryClient.setQueryData(["cancellation-preview", "activity_registration", registration.id, auth.user.id], {
+      subject_type: "activity_registration",
+      subject_id: registration.id,
+      venue_id: registration.venue_id,
+      snapshot_id: "snapshot-id",
+      policy_family: "occurrence_ticket",
+      policy_key: "standard_12h",
+      policy_version: 1,
+      provenance: "test",
+      copy_sv: { title: "Standard 12h", summary: "Full återbetalning fram till 12 timmar före start.", late: "Ingen återbetalning.", boundary: "Strikt före gränsen." },
+      copy_en: { title: "Standard 12h", summary: "Full refund until 12 hours before start.", late: "No refund.", boundary: "Strictly before the cutoff." },
+      evaluated_at: new Date().toISOString(),
+      state_revision: "test-revision",
+      allowed: true,
+      reason_code: "customer_cancelled_before_refund_cutoff",
+      already_cancelled: false,
+      checked_in: false,
+      cancel_deadline_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      refund_deadline_at: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+      refund_mode: "none",
+      refund_amount_minor: 0,
+      currency: "SEK",
+      entitlement_restore_mode: "none",
+      capacity_release_mode: "immediate",
+    });
   }
   queryClient.setQueryData(["payment-methods"], { methods: [] });
   queryClient.setQueryData(["venue-id-for-push", "pickla-arena-sthlm"], "venue-id");

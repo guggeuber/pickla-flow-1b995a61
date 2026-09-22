@@ -12,6 +12,7 @@ import { useAccessSnapshot } from "@/hooks/useAccessSnapshot";
 import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurrenceOverrideKey } from "@/lib/activitySessionOverrides";
 import picklaLogo from "@/assets/pickla-logo.svg";
 import { SessionActions, SessionDrawerShell, SessionPriceBlock, SessionSocialContextSection } from "@/components/session";
+import CancellationPolicyNotice from "@/components/CancellationPolicyNotice";
 import { ResponsiveSupabaseImage } from "@/components/ResponsiveSupabaseImage";
 import { formatSek } from "@/lib/activityPricing";
 import { activityCheckInAvailable, useActivityNow } from "@/lib/activityTiming";
@@ -1179,6 +1180,14 @@ export default function ProgramSessionPage({ overlayOnly = false }: { overlayOnl
               sharedHistoryCount={socialContext?.shared_history_count || 0}
               accountState={verifiedAccount.state}
               loginHref={`/auth?redirect=${encodeURIComponent(safeLocalPath(programPath))}`}
+            />
+          ) : null}
+
+          {!isRegistered && commerceStep === "product" ? (
+            <CancellationPolicyNotice
+              venueId={venueId}
+              family="occurrence_ticket"
+              productId={selectedCommerceProduct?.id || commerceParticipationProduct?.id || null}
             />
           ) : null}
 

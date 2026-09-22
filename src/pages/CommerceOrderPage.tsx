@@ -113,6 +113,7 @@ export default function CommerceOrderPage() {
   if (query.isLoading || authLoading) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center pt-20"><Loader2 className="h-6 w-6 animate-spin" /></div></div>;
   if (!query.data) return <div className="min-h-[100dvh] bg-white"><PicklaTopBar slug={venueSlug} background="#ffffff" /><div className="grid min-h-[100dvh] place-items-center px-6 pt-20 text-center">Ordern kunde inte öppnas.</div></div>;
   const { order, lines, receipt } = query.data;
+  const cancellationPolicy = query.data.cancellation_policy;
   const dayPassLine = lines.find((line) => line.product_key === "day_access" || line.resolver_snapshot?.purchase_kind === "day_pass");
   const isDayPassPurchase = Boolean(dayPassLine);
   const hasParticipation = Boolean(activity || course || league);
@@ -240,6 +241,15 @@ export default function CommerceOrderPage() {
           </section>
         ) : null}
         <div className="mb-9 px-12 text-center">{waiting ? <Loader2 className="mx-auto h-7 w-7 animate-spin text-slate-600" /> : purchaseConfirmed ? <Check data-testid="commerce-success-check" className="mx-auto h-8 w-8 stroke-[1.75] text-slate-950" /> : <XCircle className="mx-auto h-7 w-7 text-slate-600" />}<h1 className="mt-5 text-3xl font-black">{heading}</h1><p className="mt-2 text-sm text-slate-500">{supportingCopy}</p></div>
+        {purchaseConfirmed && hasParticipation && cancellationPolicy ? (
+          <section className="mb-6 rounded-2xl border border-black/10 bg-slate-50 p-4">
+            <p className="text-xs font-black">{cancellationPolicy.copy_sv.title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">{cancellationPolicy.copy_sv.summary}</p>
+            <p className="mt-2 text-[11px] font-semibold text-slate-500">
+              Köpt enligt {cancellationPolicy.policy_key} · v{cancellationPolicy.policy_version ?? cancellationPolicy.version ?? "legacy"}
+            </p>
+          </section>
+        ) : null}
         {interruptedCheckout ? <section className="mb-6 grid gap-3 border-y border-black/10 py-5">
           <button type="button" onClick={() => reopenCheckout.mutate()} disabled={reopenCheckout.isPending} className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-slate-950 font-black text-white disabled:opacity-40">{reopenCheckout.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Försök igen</button>
         </section> : null}

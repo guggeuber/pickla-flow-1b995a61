@@ -45,36 +45,38 @@ describe("activity cancellation capacity truth", () => {
     expect(migration).not.toContain("INSERT INTO public.ledger_entries");
   });
 
-  it("accepts paid self-cancellation as an immediate participation release and safely reconciles retries", () => {
+  it("routes legacy paid self-cancellation through the canonical policy/R2A command", () => {
     const cancelRoute = commerce.indexOf("path === 'cancel'");
     const resolveRoute = commerce.indexOf("path === 'resolve'", cancelRoute);
     const route = commerce.slice(cancelRoute, resolveRoute);
-    const stripeRefund = route.lastIndexOf("createStripeRefund");
-    const participationCancel = route.lastIndexOf("cancelActivityRegistrationParticipation");
-    expect(stripeRefund).toBeGreaterThan(-1);
-    expect(participationCancel).toBeGreaterThan(stripeRefund);
+    expect(route).toContain("cancellation_subject_state");
+    expect(route).toContain("confirmCancellationAndDispatchRefund");
+    expect(route).toContain("EXPECTED_POLICY_CHANGE");
+    expect(route).not.toContain("createStripeRefund");
+    expect(route).not.toContain("cancelActivityRegistrationParticipation");
     expect(route).toContain("participation_cancelled: true");
-    expect(route).toContain("if (cancellationAlreadyRequested)");
-    expect(route.indexOf("if (cancellationAlreadyRequested)")).toBeLessThan(route.indexOf("activitySessionOccurrenceInterval"));
-    expect(route).toContain("DateTime.now().setZone('Europe/Stockholm') >= interval.start");
+    expect(route).toContain("preview.state_revision");
   });
 
-  it("uses the same idempotent command for full-refund fallback and staff cancellation", () => {
+  it("uses the same canonical command for staff cancellation", () => {
     expect(webhook).toContain("cancel_activity_registration_participation");
     expect(webhook).toContain("p_source: 'stripe_refund'");
     expect(bookings).toContain("path === 'activity-participant-cancel'");
-    expect(bookings).toContain("payment_action_required: result.financial_state === 'paid_not_refunded'");
+    expect(bookings).toContain("confirmCancellationAndDispatchRefund");
+    expect(bookings).toContain("staffRefundChoice: 'none'");
+    expect(bookings).toContain("staffRestoreChoice: 'none'");
     expect(bookings).toContain("if (!await canOperateVenue(admin, userId, venueId))");
   });
 
-  it("does not invent refund semantics for the separate co-player cancellation path", () => {
+  it("moves the co-player path to policy preview and confirmation without client-supplied refund facts", () => {
     const participantCancel = bookings.indexOf("path === 'booking-participant-cancel'");
     const receiptRoute = bookings.indexOf("path === 'receipt'", participantCancel);
     const route = bookings.slice(participantCancel, receiptRoute);
-    expect(route).toContain("cancelBookingParticipantCapacity");
-    expect(route).toContain("Kontakta oss för återbetalning");
-    expect(route).not.toContain("createStripeRefund");
-    expect(route).not.toContain("cancelActivityRegistrationParticipation");
+    expect(route).toContain("cancellation_subject_state");
+    expect(route).toContain("confirmCancellationAndDispatchRefund");
+    expect(route).toContain("EXPECTED_POLICY_CHANGE");
+    expect(route).not.toContain("body.refund");
+    expect(route).not.toContain("body.payer");
   });
 
   it("shows cancelled participation and payment truth without polluting capacity or check-in totals", () => {
@@ -84,7 +86,7 @@ describe("activity cancellation capacity truth", () => {
     expect(bookings).toContain("AVBOKAD · ÅTERBETALNING PÅGÅR");
     expect(desk).toContain("participant.has_place !== false");
     expect(desk).toContain("capacityParticipants.filter");
-    expect(myPage).toContain("Platsen är släppt. Återbetalningen behandlas separat av Stripe.");
+    expect(myPage).toContain("Platsen är släppt. Återbetalningen behandlas.");
   });
 
   it("contains the exact Henry shape, missed-webhook proof, and real competing transactions", () => {

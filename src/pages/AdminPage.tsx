@@ -23,6 +23,7 @@ import {
   RefreshCw,
   Settings,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   TabletSmartphone,
   Tag,
@@ -58,6 +59,7 @@ import AdminRevenueLedger from "@/components/admin/AdminRevenueLedger";
 import { resolveAuthorizationUiState } from "@/lib/authorizationUiState";
 import AdminFinancialMaintenance from "@/components/admin/AdminFinancialMaintenance";
 import AdminCommunications from "@/components/admin/AdminCommunications";
+import AdminCancellationPolicies from "@/components/admin/AdminCancellationPolicies";
 import CustomersScreen from "@/screens/CustomersScreen";
 import AdminTopNav, { AdminSurfaceDef, AdminSurfaceId } from "@/components/admin/shell/AdminTopNav";
 import AdminToday from "@/components/admin/shell/AdminToday";
@@ -167,6 +169,7 @@ const sectionLabels: Record<string, { label: string; icon: any }> = {
   corporate: { label: "Företag", icon: Building2 },
   channels: { label: "Chat Channels", icon: MessageSquare },
   communications: { label: "Pickla Mail", icon: Mail },
+  cancellationPolicies: { label: "Avbokning & återbetalning", icon: ShieldCheck },
 };
 
 function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | undefined; onBack: () => void }) {
@@ -216,6 +219,7 @@ function ModuleDetail({ id, venueId, onBack }: { id: string; venueId: string | u
             {id === "corporate" && <AdminCorporate venueId={venueId} />}
             {id === "channels" && <AdminChannels venueId={venueId} />}
             {id === "communications" && <AdminCommunications />}
+            {id === "cancellationPolicies" && <AdminCancellationPolicies venueId={venueId} />}
           </>
         )}
       </div>

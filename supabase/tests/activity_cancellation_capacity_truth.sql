@@ -22,9 +22,6 @@ DELETE FROM public.commerce_orders WHERE venue_id = 'ca110000-0000-4000-8000-000
 DELETE FROM public.booking_receipts WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.session_registrations WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.capacity_holds WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
-DELETE FROM public.customers
-WHERE organization_id = 'ca110000-0000-4000-8000-000000000001'
-   OR auth_user_id::TEXT LIKE 'ca110000-0000-4000-8000-0000000001%';
 DELETE FROM public.venue_staff WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.activity_session_overrides WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.activity_sessions WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
@@ -70,10 +67,31 @@ INSERT INTO auth.users (
   ('ca110000-0000-4000-8000-000000000190', 'authenticated', 'authenticated', 'cancel-staff@example.test', '', now(), '{"provider":"email","providers":["email"]}', '{}', now(), now())
 ON CONFLICT (id) DO NOTHING;
 
--- Local auth bootstrap creates default-organization customer rows. These
--- fixtures need deterministic customer ids in the isolated test organization.
-DELETE FROM public.customers
-WHERE auth_user_id::TEXT LIKE 'ca110000-0000-4000-8000-0000000001%';
+-- Local auth bootstrap creates one default-organization customer per new auth
+-- user. Remove only those unreferenced bootstrap rows on the first run; keep
+-- the deterministic fixture customers and immutable snapshot references on
+-- every rerun.
+DELETE FROM public.customers customer
+WHERE customer.auth_user_id::TEXT LIKE 'ca110000-0000-4000-8000-0000000001%'
+  AND customer.id NOT IN (
+    'ca110000-0000-4000-8000-000000000201',
+    'ca110000-0000-4000-8000-000000000202',
+    'ca110000-0000-4000-8000-000000000203',
+    'ca110000-0000-4000-8000-000000000204',
+    'ca110000-0000-4000-8000-000000000205',
+    'ca110000-0000-4000-8000-000000000206',
+    'ca110000-0000-4000-8000-000000000210',
+    'ca110000-0000-4000-8000-000000000211',
+    'ca110000-0000-4000-8000-000000000212',
+    'ca110000-0000-4000-8000-000000000213',
+    'ca110000-0000-4000-8000-000000000214',
+    'ca110000-0000-4000-8000-000000000215',
+    'ca110000-0000-4000-8000-000000000216'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM public.cancellation_policy_snapshots snapshot
+    WHERE snapshot.payer_customer_id = customer.id
+  );
 
 INSERT INTO public.venue_staff (user_id, venue_id, role, is_active)
 VALUES ('ca110000-0000-4000-8000-000000000190', 'ca110000-0000-4000-8000-000000000002', 'venue_admin', true);
@@ -92,7 +110,8 @@ VALUES
   ('ca110000-0000-4000-8000-000000000213', 'ca110000-0000-4000-8000-000000000001', 'ca110000-0000-4000-8000-000000000113', 'Capacity Player 3', 'cancel-13@example.test', 'cancel-13@example.test'),
   ('ca110000-0000-4000-8000-000000000214', 'ca110000-0000-4000-8000-000000000001', 'ca110000-0000-4000-8000-000000000114', 'Capacity Player 4', 'cancel-14@example.test', 'cancel-14@example.test'),
   ('ca110000-0000-4000-8000-000000000215', 'ca110000-0000-4000-8000-000000000001', 'ca110000-0000-4000-8000-000000000115', 'Capacity Player 5', 'cancel-15@example.test', 'cancel-15@example.test'),
-  ('ca110000-0000-4000-8000-000000000216', 'ca110000-0000-4000-8000-000000000001', 'ca110000-0000-4000-8000-000000000116', 'Capacity Player 6', 'cancel-16@example.test', 'cancel-16@example.test');
+  ('ca110000-0000-4000-8000-000000000216', 'ca110000-0000-4000-8000-000000000001', 'ca110000-0000-4000-8000-000000000116', 'Capacity Player 6', 'cancel-16@example.test', 'cancel-16@example.test')
+ON CONFLICT (id) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION public.activity_cancellation_test_fixture(
   p_registration_id UUID,
@@ -111,6 +130,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_vat_minor INTEGER := round(p_amount_minor * 6.0 / 106.0);
+  v_snapshot public.cancellation_policy_snapshots%ROWTYPE;
 BEGIN
   INSERT INTO public.booking_receipts (
     id, receipt_number, venue_id, user_id, customer_id, customer_name,
@@ -152,9 +172,20 @@ BEGIN
     jsonb_build_object('registration_id', p_registration_id)
   );
 
+  SELECT * INTO v_snapshot FROM public.create_cancellation_policy_snapshot(
+    'ca110000-0000-4000-8000-000000000002', 'occurrence_ticket',
+    'activity_cancellation_capacity_test', p_line_id,
+    ((p_session_date::TEXT || 'T18:00:00')::TIMESTAMP AT TIME ZONE 'Europe/Stockholm'),
+    NULL, NULL, NULL, NULL, p_user_id, p_customer_id,
+    jsonb_build_object('commerce_order_id',p_order_id,'commerce_order_line_id',p_line_id,
+      'amount_minor',p_amount_minor,'currency','SEK'),
+    jsonb_build_object('meter_type','unlimited')
+  );
+
   INSERT INTO public.session_registrations (
     id, venue_id, activity_session_id, session_date, user_id, customer_id,
-    status, price_paid_sek, stripe_session_id, source_type, source_id, metadata
+    status, price_paid_sek, stripe_session_id, source_type, source_id, metadata,
+    cancellation_policy_snapshot_id
   ) VALUES (
     p_registration_id, 'ca110000-0000-4000-8000-000000000002',
     'ca110000-0000-4000-8000-000000000010', p_session_date, p_user_id,
@@ -162,7 +193,8 @@ BEGIN
     'cs_test_' || right(p_order_id::TEXT, 12), 'commerce_order', p_line_id,
     CASE WHEN p_amount_minor = 0
       THEN '{"pricing_reason":"membership","access_reason":"Medlemskap"}'::JSONB
-      ELSE '{"pricing_reason":"regular_price"}'::JSONB END
+      ELSE '{"pricing_reason":"regular_price"}'::JSONB END,
+    v_snapshot.id
   );
 
   INSERT INTO public.commerce_order_lines (
@@ -171,7 +203,7 @@ BEGIN
     vat_amount_minor, line_total_ex_vat_minor, source_type, source_id,
     fulfillment_type, fulfillment_status, activity_session_id, session_date,
     session_registration_id, beneficiary_customer_id, beneficiary_user_id,
-    capacity_hold_id, resolver_snapshot
+    capacity_hold_id, resolver_snapshot, cancellation_policy_snapshot_id
   ) VALUES (
     p_line_id, p_order_id, 'cancellation_truth', 'Cancellation truth',
     'participation', 1, p_amount_minor, 0, p_amount_minor, 6,
@@ -181,7 +213,8 @@ BEGIN
     p_registration_id, p_customer_id, p_user_id, p_hold_id,
     CASE WHEN p_amount_minor = 0
       THEN '{"purchase_kind":"activity_ticket","pricing_reason":"membership"}'::JSONB
-      ELSE '{"purchase_kind":"activity_ticket","pricing_reason":"regular_price"}'::JSONB END
+      ELSE '{"purchase_kind":"activity_ticket","pricing_reason":"regular_price"}'::JSONB END,
+    v_snapshot.id
   );
 
   UPDATE public.commerce_orders
@@ -460,17 +493,27 @@ CREATE TABLE public.activity_cancellation_concurrency_results (
   detail TEXT,
   PRIMARY KEY (case_name, contender)
 );
+INSERT INTO public.activity_cancellation_concurrency_results
+VALUES ('__config__', 'run', true, gen_random_uuid()::TEXT);
 
 CREATE OR REPLACE FUNCTION public.activity_cancellation_test_cancel(
   p_case TEXT, p_contender TEXT, p_registration_id UUID, p_order_id UUID,
   p_delay_after NUMERIC DEFAULT 0
 ) RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE v_preview JSONB;
 BEGIN
   BEGIN
-    PERFORM * FROM public.cancel_activity_registration_participation(
-      p_registration_id, p_order_id, 'ca110000-0000-4000-8000-000000000190',
-      'staff', 'concurrent staff cancellation', p_case || '-' || p_contender,
-      NULL, now()
+    v_preview := public.cancellation_subject_state(
+      'activity_registration', p_registration_id, 'ca110000-0000-4000-8000-000000000190',
+      true, now(), 'none', 'none'
+    );
+    PERFORM public.confirm_cancellation_policy_v1(
+      'activity_registration', p_registration_id, 'ca110000-0000-4000-8000-000000000190',
+      v_preview->>'state_revision', p_case || ':' || (
+        SELECT detail FROM public.activity_cancellation_concurrency_results
+        WHERE case_name='__config__' AND contender='run'
+      ), true, 'concurrent staff cancellation',
+      'test', 'platform', 'none', 'none'
     );
     PERFORM pg_sleep(p_delay_after);
     INSERT INTO public.activity_cancellation_concurrency_results
@@ -660,9 +703,6 @@ DELETE FROM public.commerce_orders WHERE venue_id = 'ca110000-0000-4000-8000-000
 DELETE FROM public.booking_receipts WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.session_registrations WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.capacity_holds WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
-DELETE FROM public.customers
-WHERE organization_id = 'ca110000-0000-4000-8000-000000000001'
-   OR auth_user_id::TEXT LIKE 'ca110000-0000-4000-8000-0000000001%';
 DELETE FROM public.venue_staff WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.activity_session_overrides WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';
 DELETE FROM public.activity_sessions WHERE venue_id = 'ca110000-0000-4000-8000-000000000002';

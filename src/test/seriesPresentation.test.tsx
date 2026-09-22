@@ -162,7 +162,7 @@ describe("Series presentation projection", () => {
     expect(migration).toContain("Customer presentation only");
     expect(formatWrite).toContain("presentation_type");
     expect(seriesWrite).not.toContain("presentation_type:");
-    expect(commerce.match(/presentation_type/g)).toHaveLength(3);
+    expect(commerce.match(/presentation_type/g)).toHaveLength(6);
     expect(commerce).not.toMatch(/presentation_type\s*===|presentation_type\s*!==/);
   });
 

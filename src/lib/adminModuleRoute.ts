@@ -19,6 +19,7 @@ const ADMIN_MODULE_PATHS = {
   corporate: "corporate",
   channels: "channels",
   communications: "communications",
+  cancellationPolicies: "cancellation-policies",
 } as const;
 
 export type AdminModuleId = keyof typeof ADMIN_MODULE_PATHS;

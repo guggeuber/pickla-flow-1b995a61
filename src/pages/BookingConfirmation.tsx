@@ -63,6 +63,7 @@ export default function BookingConfirmation() {
   const participants = Array.isArray(data?.participants) ? data.participants : [];
   const totalPrice = data?.totalPrice || 0;
   const receipt = data?.receipt;
+  const cancellationPolicy = data?.cancellation_policy;
   const [creatingInvite, setCreatingInvite] = useState(false);
   const [invitePreparing, setInvitePreparing] = useState(false);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
@@ -320,6 +321,16 @@ export default function BookingConfirmation() {
             )}
           </section>
         )}
+
+        {cancellationPolicy ? (
+          <section className="mb-4 rounded-[24px] border border-neutral-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-bold text-neutral-950" style={{ fontFamily: FONT_GROTESK }}>{cancellationPolicy.copy_sv?.title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500" style={{ fontFamily: FONT_MONO }}>{cancellationPolicy.copy_sv?.summary}</p>
+            <p className="mt-2 text-[10px] font-bold uppercase tracking-wide text-neutral-400" style={{ fontFamily: FONT_MONO }}>
+              {cancellationPolicy.policy_key} · v{cancellationPolicy.policy_version ?? "legacy"}
+            </p>
+          </section>
+        ) : null}
 
         <section className="rounded-[28px] bg-white border border-neutral-200 p-5 shadow-sm print:rounded-none print:shadow-none print:border-neutral-300">
           <div className="flex items-start justify-between gap-4">

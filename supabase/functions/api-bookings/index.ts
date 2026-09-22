@@ -65,6 +65,8 @@ import {
   PhysicalAvailabilityLookupError,
   publicPhysicalConflicts,
 } from '../_shared/physical_availability.ts';
+import { requireStripeRuntimeEnvironment } from '../_shared/stripe_environment.ts';
+import { confirmCancellationAndDispatchRefund } from '../_shared/cancellation_execution.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -78,6 +80,17 @@ const ACTIVITY_PARTICIPANT_INVITE_SOURCE = 'activity_participant_invitation';
 const ACTIVITY_PARTICIPANT_INVITE_TTL_SECONDS = 31 * 60;
 const ACTIVITY_PARTICIPANT_PREPARING_STALE_SECONDS = 35 * 60;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function cancellationRuntimeAllowNoRefund() {
+  try {
+    return requireStripeRuntimeEnvironment();
+  } catch {
+    return {
+      stripeKey: '',
+      stripeMode: (Deno.env.get('PICKLA_ENVIRONMENT') === 'production' ? 'live' : 'test') as 'live' | 'test',
+    };
+  }
+}
 const RESEND_FROM = Deno.env.get('RESEND_FROM') || 'Pickla <hello@playpickla.com>';
 const STRIPE_API_BASE = (Deno.env.get('STRIPE_API_BASE') || 'https://api.stripe.com/v1').replace(/\/$/, '');
 
@@ -530,48 +543,6 @@ async function commitBookingParticipantCapacity(admin: any, args: Record<string,
   return result;
 }
 
-async function cancelBookingParticipantCapacity(admin: any, participantId: string, actorUserId: string | null, metadata: Record<string, unknown>) {
-  const { data, error } = await admin.rpc('cancel_booking_participant_capacity', {
-    p_participant_id: participantId,
-    p_actor_user_id: actorUserId,
-    p_metadata: metadata,
-  });
-  if (error) throw new Error(error.message);
-  return Boolean(data);
-}
-
-type ActivityCancellationCommandResult = {
-  registration_status: 'cancelled';
-  financial_state: 'unmanaged' | 'not_applicable' | 'refund_requested' | 'paid_not_refunded';
-  available_count: number | null;
-};
-
-async function cancelActivityRegistrationParticipation(admin: ServiceClient, input: {
-  registrationId: string;
-  orderId?: string | null;
-  actorUserId: string;
-  source: 'staff';
-  reason: string;
-  requestId: string;
-}) {
-  const { data, error } = await admin.rpc('cancel_activity_registration_participation', {
-    p_registration_id: input.registrationId,
-    p_order_id: input.orderId || null,
-    p_actor_user_id: input.actorUserId,
-    p_source: input.source,
-    p_reason: input.reason,
-    p_request_id: input.requestId,
-    p_refund_id: null,
-    p_requested_at: new Date().toISOString(),
-  }).maybeSingle();
-  if (error) throw new Error(error.message);
-  const result = data as ActivityCancellationCommandResult | null;
-  if (!result || result.registration_status !== 'cancelled') {
-    throw new Error('Activity participation cancellation did not complete');
-  }
-  return result;
-}
-
 function minorToSek(minor: number) {
   return Math.round(Number(minor || 0)) / 100;
 }
@@ -717,6 +688,43 @@ function bookingParticipantFundingMetadata(pricing: any) {
     consumption_trigger: coverage.consumptionTrigger,
     no_show_policy: coverage.noShowPolicy,
   };
+}
+
+async function createBookingFlowCancellationSnapshot(admin: ServiceClient, input: {
+  venueId: string;
+  family: 'court_booking' | 'booking_participant' | 'occurrence_ticket';
+  purchaseReferenceType: string;
+  purchaseReferenceId: string;
+  startAt: string;
+  productId?: string | null;
+  payerUserId?: string | null;
+  payerCustomerId?: string | null;
+  amountMinor: number;
+  currency?: string;
+  funding?: Record<string, unknown>;
+}) {
+  const { data, error } = await admin.rpc('create_cancellation_policy_snapshot', {
+    p_venue_id: input.venueId,
+    p_policy_family: input.family,
+    p_purchase_reference_type: input.purchaseReferenceType,
+    p_purchase_reference_id: input.purchaseReferenceId,
+    p_start_at: input.startAt,
+    p_registration_close_at: null,
+    p_access_product_id: input.productId || null,
+    p_activity_series_id: null,
+    p_event_id: null,
+    p_payer_user_id: input.payerUserId || null,
+    p_payer_customer_id: input.payerCustomerId || null,
+    p_payment_provenance: {
+      amount_minor: input.amountMinor,
+      currency: input.currency || 'SEK',
+      purchase_reference_type: input.purchaseReferenceType,
+      purchase_reference_id: input.purchaseReferenceId,
+    },
+    p_funding_provenance: input.funding || {},
+  }).maybeSingle();
+  if (error || !data?.id) throw new Error(error?.message || 'Cancellation policy snapshot could not be created');
+  return data;
 }
 
 async function acquireBookingParticipantPaymentHold(
@@ -1656,92 +1664,6 @@ function profileDisplayName(profile: any) {
   return fullName || profile.display_name || profile.phone || null;
 }
 
-async function refundMembershipCourtHours(admin: any, rows: any[]) {
-  const refunds = new Map<string, {
-    user_id: string;
-    venue_id: string;
-    period_start: string;
-    period_end: string;
-    value: number;
-  }>();
-
-  for (const row of rows) {
-    if (row.status === 'cancelled') continue;
-    const existingIncluded = parseNumber(row.included_court_hours, 0);
-    let refundHours = existingIncluded;
-    let periodStart = row.membership_usage_period_start || null;
-    let periodEnd = row.membership_usage_period_end || null;
-
-    // Legacy fallback for bookings made before usage metadata existed.
-    if (refundHours <= 0 && Number(row.total_price || 0) === 0 && row.user_id && row.venue_id) {
-      const sportType = row.venue_courts?.sport_type || 'pickleball';
-      const { data: membership } = await admin
-        .from('memberships')
-        .select('id, tier_id')
-        .eq('user_id', row.user_id)
-        .eq('venue_id', row.venue_id)
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (membership?.tier_id) {
-        let entitlementQuery = admin
-          .from('membership_entitlements')
-          .select('id')
-          .eq('tier_id', membership.tier_id)
-          .eq('entitlement_type', 'court_hours_per_week')
-          .limit(1);
-        entitlementQuery = sportType === 'pickleball'
-          ? entitlementQuery.or('sport_type.is.null,sport_type.eq.pickleball')
-          : entitlementQuery.eq('sport_type', sportType);
-        const { data: entitlement } = await entitlementQuery.maybeSingle();
-
-        if (entitlement) refundHours = bookingDurationHours(row);
-      }
-    }
-
-    if (refundHours <= 0) continue;
-    if (!periodStart || !periodEnd) {
-      const week = stockholmWeekForIso(row.start_time);
-      periodStart = week.start;
-      periodEnd = week.end;
-    }
-    const key = `${row.user_id}:${row.venue_id}:${periodStart}`;
-    const current = refunds.get(key) || {
-      user_id: row.user_id,
-      venue_id: row.venue_id,
-      period_start: periodStart,
-      period_end: periodEnd,
-      value: 0,
-    };
-    current.value += refundHours;
-    refunds.set(key, current);
-  }
-
-  for (const refund of refunds.values()) {
-    const { data: usage } = await admin
-      .from('membership_usage')
-      .select('used_value')
-      .eq('user_id', refund.user_id)
-      .eq('venue_id', refund.venue_id)
-      .eq('entitlement_type', 'court_hours_per_week')
-      .eq('period_start', refund.period_start)
-      .maybeSingle();
-
-    if (!usage) continue;
-    await admin.from('membership_usage').update({
-      used_value: Math.max(Number(usage.used_value || 0) - refund.value, 0),
-      period_end: refund.period_end,
-      updated_at: new Date().toISOString(),
-    })
-      .eq('user_id', refund.user_id)
-      .eq('venue_id', refund.venue_id)
-      .eq('entitlement_type', 'court_hours_per_week')
-      .eq('period_start', refund.period_start);
-  }
-}
-
 async function calculateIncludedCourtHoursFromBookings(
   admin: any,
   userId: string,
@@ -1831,6 +1753,7 @@ async function createFreeEntitlementBookingResponse({
         participation_funding_source_type: 'membership_entitlement',
         participation_funding_source_id: meta.membership_id || null,
         participation_funder: 'subscription',
+        cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
       })));
     } catch (error) {
       return physicalAvailabilityErrorResponse(error);
@@ -1915,7 +1838,10 @@ async function createFreeEntitlementBookingResponse({
             p_price_paid_sek: 0,
             p_source_type: 'day_pass',
             p_source_id: dayPass.id,
-            p_metadata: { source: 'membership_free_pass' },
+            p_metadata: {
+              source: 'membership_free_pass',
+              cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
+            },
           });
         } catch (capacityErr) {
           return errorResponse('Platsen hann tas — välj ett annat pass.', 409);
@@ -1957,6 +1883,7 @@ async function createFreeEntitlementBookingResponse({
             pricing_reason: PLAYING_HOST_ROLE,
             compensation_type: PLAYING_HOST_ROLE,
             host_assignment_id: meta.host_assignment_id || null,
+            cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
           },
         });
       } catch (capacityErr) {
@@ -1986,6 +1913,7 @@ async function createFreeEntitlementBookingResponse({
             session_type: meta.session_type || 'open_play',
             session_name: meta.session_name || null,
             entitlement_type: 'open_play_unlimited',
+            cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
           },
         });
       } catch (capacityErr) {
@@ -2049,6 +1977,7 @@ async function createFreeEntitlementBookingResponse({
             session_name: meta.session_name || null,
             entitlement_type: 'session_member_discount',
             pricing_reason: meta.pricing_reason || 'session_member_discount',
+            cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
           },
         });
       } catch (capacityErr) {
@@ -2078,6 +2007,7 @@ async function createFreeEntitlementBookingResponse({
             session_type: meta.session_type || 'open_play',
             session_name: meta.session_name || null,
             entitlement_type: 'day_access',
+            cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
           },
         });
       } catch (capacityErr) {
@@ -2771,6 +2701,35 @@ Deno.serve(async (req) => {
     }
     if (!participant) return errorResponse('Could not create participant', 500);
 
+    if (!participant.cancellation_policy_snapshot_id) {
+      const snapshot = await createBookingFlowCancellationSnapshot(admin, {
+        venueId: invite.venue_id,
+        family: 'booking_participant',
+        purchaseReferenceType: 'booking_participant',
+        purchaseReferenceId: participant.id,
+        startAt: representative.start_time,
+        payerUserId: participant.user_id || userId || null,
+        payerCustomerId: participant.customer_id || customerId || null,
+        amountMinor: Number(participant.price_minor || 0),
+        currency: participant.currency || 'SEK',
+        funding: {
+          entitlement_type: participantMetadata.entitlement_type || null,
+          funding_type: participantMetadata.funding_type || null,
+          funder: participantMetadata.funder || null,
+          consumption_required: participantMetadata.consumption_required === true,
+          meter_type: participantMetadata.consumption_required === true ? 'occurrences' : 'unlimited',
+        },
+      });
+      const { data: snapshotted, error: snapshotUpdateError } = await admin.from('booking_participants')
+        .update({ cancellation_policy_snapshot_id: snapshot.id })
+        .eq('id', participant.id)
+        .is('cancellation_policy_snapshot_id', null)
+        .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, currency, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, checked_in_at, metadata, created_at, cancellation_policy_snapshot_id')
+        .maybeSingle();
+      if (snapshotUpdateError) return errorResponse(snapshotUpdateError.message, 500);
+      participant = snapshotted || { ...participant, cancellation_policy_snapshot_id: snapshot.id };
+    }
+
     const forwardedFor = req.headers.get('x-forwarded-for');
     const ip = forwardedFor?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null;
     const { error: auditErr } = await admin.from('audit_log').insert({
@@ -2885,7 +2844,7 @@ Deno.serve(async (req) => {
       const adminCheckout = getServiceClient();
       const { data: participantData, error: participantErr } = await adminCheckout
         .from('booking_participants')
-        .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+        .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, cancellation_policy_snapshot_id, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
         .eq('id', participantId)
         .maybeSingle();
       if (participantErr) return errorResponse(participantErr.message, 500);
@@ -2904,6 +2863,30 @@ Deno.serve(async (req) => {
         return errorResponse('Deltagarplatsen kan inte betalas i sitt nuvarande läge.', 409);
       }
       const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
+      if (!booking) return errorResponse('Booking participant booking not found', 404);
+      if (!participant.cancellation_policy_snapshot_id) {
+        const snapshot = await createBookingFlowCancellationSnapshot(adminCheckout, {
+          venueId: participant.venue_id,
+          family: 'booking_participant',
+          purchaseReferenceType: 'booking_participant',
+          purchaseReferenceId: participant.id,
+          startAt: booking.start_time,
+          payerUserId: participant.user_id || actorUserId,
+          payerCustomerId: participant.customer_id || null,
+          amountMinor: Number(participant.price_minor || 0),
+          currency: 'SEK',
+          funding: participant.metadata || {},
+        });
+        const { data: updatedParticipant, error: snapshotError } = await adminCheckout
+          .from('booking_participants')
+          .update({ cancellation_policy_snapshot_id: snapshot.id })
+          .eq('id', participant.id)
+          .is('cancellation_policy_snapshot_id', null)
+          .select('id, venue_id, booking_id, booking_group_key, invite_id, customer_id, user_id, display_name, email, phone, role, price_minor, payment_status, payment_method, payment_stripe_session_id, booking_receipt_id, cancellation_policy_snapshot_id, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, included_court_hours, membership_usage_entitlement_type, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+          .maybeSingle();
+        if (snapshotError) return errorResponse(snapshotError.message, 500);
+        participant = updatedParticipant || { ...participant, cancellation_policy_snapshot_id: snapshot.id };
+      }
       const bookingRows = await getBookingGroupRows(adminCheckout, booking);
       const currentCoverage = await resolveCurrentBookingParticipantCoverage(adminCheckout, participant, {
         bookingRows,
@@ -2982,6 +2965,7 @@ Deno.serve(async (req) => {
       meta.booking_ref = (Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings)?.booking_ref || '';
       meta.pricing_reason = BOOKING_PARTICIPANT_SOURCE_TYPE;
       meta.base_amount_sek = String(baseAmountSek);
+      meta.cancellation_policy_snapshot_id = participant.cancellation_policy_snapshot_id || '';
       const participantMetadata = participant.metadata && typeof participant.metadata === 'object' ? participant.metadata : {};
       if (participantIsPublicOpenBookingClaim(participant)) {
         if (!booking || booking.open_for_more_status !== 'open') {
@@ -3416,6 +3400,53 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Freeze the exact cancellation terms before either a direct free commit
+    // or Stripe Checkout is created. The resulting immutable snapshot id is
+    // carried through Stripe metadata and attached to the fulfilled subject.
+    if (product_type === 'court_booking' || product_type === 'activity_ticket' || product_type === 'day_pass') {
+      const adminPolicy = getServiceClient();
+      const purchaseReferenceId = UUID_PATTERN.test(String(meta.cancellation_purchase_reference_id || ''))
+        ? String(meta.cancellation_purchase_reference_id)
+        : crypto.randomUUID();
+      let startAt: string | null = null;
+      if (product_type === 'court_booking') {
+        startAt = physicalIntervalFromLocal(meta.date, meta.start_time, meta.end_time).startsAt;
+      } else {
+        const activitySessionId = meta.activity_session_id || meta.open_play_session_id;
+        const { data: activity, error: activityError } = await adminPolicy.from('activity_sessions')
+          .select('start_time, end_time').eq('id', activitySessionId).eq('venue_id', venue_id).maybeSingle();
+        if (activityError || !activity) return errorResponse(activityError?.message || 'Activity not found', 404);
+        const interval = activitySessionOccurrenceInterval(meta.date, activity.start_time, activity.end_time);
+        if (!interval) return errorResponse('Invalid activity occurrence', 400);
+        startAt = interval.start.toUTC().toISO();
+      }
+      const payerCustomerId = entitlementUserId
+        ? await resolveCustomerIdForUser(adminPolicy, entitlementUserId)
+        : null;
+      const snapshot = await createBookingFlowCancellationSnapshot(adminPolicy, {
+        venueId: venue_id,
+        family: product_type === 'court_booking' ? 'court_booking' : 'occurrence_ticket',
+        purchaseReferenceType: product_type === 'court_booking' ? 'court_checkout' : 'activity_checkout',
+        purchaseReferenceId,
+        startAt: startAt!,
+        payerUserId: entitlementUserId || null,
+        payerCustomerId,
+        amountMinor: Math.round(Math.max(finalAmountSek, 0) * 100),
+        currency: 'SEK',
+        funding: {
+          entitlement_type: meta.entitlement_type || null,
+          membership_id: meta.membership_id || null,
+          included_court_hours: Number(meta.included_court_hours || 0),
+          consumption_required: Boolean(activityPricingDecision?.consumptionRequired),
+          meter_type: product_type === 'court_booking' && Number(meta.included_court_hours || 0) > 0
+            ? 'court_hours'
+            : activityPricingDecision?.consumptionRequired ? 'occurrences' : 'unlimited',
+        },
+      });
+      meta.cancellation_purchase_reference_id = purchaseReferenceId;
+      meta.cancellation_policy_snapshot_id = snapshot.id;
+    }
+
     // Free entitlement bookings bypass Stripe entirely
     if (finalAmountSek === 0 && !isMembership) {
       const freeResponse = await createFreeEntitlementBookingResponse({
@@ -3532,6 +3563,8 @@ Deno.serve(async (req) => {
       booking_id: String(meta.booking_id || ''),
       booking_ref: String(meta.booking_ref || ''),
       capacity_hold_id: String(meta.capacity_hold_id || ''),
+      cancellation_policy_snapshot_id: String(meta.cancellation_policy_snapshot_id || ''),
+      cancellation_purchase_reference_id: String(meta.cancellation_purchase_reference_id || ''),
       open_booking_context: String(meta.open_booking_context || ''),
       open_booking_opened_places: String(meta.open_booking_opened_places || ''),
       open_booking_public_capacity: String(meta.open_booking_public_capacity || ''),
@@ -3938,7 +3971,7 @@ Deno.serve(async (req) => {
 
     // Get all bookings with same notes (grouped booking) or single
     const { data: booking } = await admin.from('bookings')
-      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, user_id, access_code, stripe_session_id, created_at, venue_courts(name, court_number, sport_type)')
+      .select('id, booking_ref, venue_court_id, start_time, end_time, total_price, status, notes, venue_id, user_id, access_code, stripe_session_id, created_at, cancellation_policy_snapshot_id, venue_courts(name, court_number, sport_type)')
       .eq('booking_ref', ref).single();
 
     if (!booking) return errorResponse('Booking not found', 404);
@@ -4046,6 +4079,12 @@ Deno.serve(async (req) => {
         has_place: participant.has_place,
       }));
 
+    const { data: cancellationPolicy } = booking.cancellation_policy_snapshot_id
+      ? await admin.from('cancellation_policy_snapshots')
+          .select('policy_key,policy_version,policy_family,provenance,rules,copy_sv,copy_en,cancel_deadline_at,refund_deadline_at')
+          .eq('id', booking.cancellation_policy_snapshot_id).maybeSingle()
+      : { data: null };
+
     return jsonResponse({
       booking,
       venue,
@@ -4057,6 +4096,7 @@ Deno.serve(async (req) => {
       participants: publicParticipants,
       totalPrice,
       receipt: receiptView,
+      cancellation_policy: cancellationPolicy,
     }, 200, 30);
   }
 
@@ -4424,6 +4464,23 @@ Deno.serve(async (req) => {
       return errorResponse('Betalning krävs innan bokningen kan bekräftas.', 402);
     }
 
+    const bookingCustomerId = await resolveCustomerIdForUser(admin, bookingUserId);
+    const cancellationSnapshot = await createBookingFlowCancellationSnapshot(admin, {
+      venueId: venue.id,
+      family: 'court_booking',
+      purchaseReferenceType: 'direct_booking_group',
+      purchaseReferenceId: crypto.randomUUID(),
+      startAt: startISO,
+      payerUserId: bookingUserId,
+      payerCustomerId: bookingCustomerId,
+      amountMinor: Math.round(pricedCourts.reduce((sum, court) => sum + court.price, 0) * 100),
+      currency: 'SEK',
+      funding: {
+        funding_type: validCorporatePackageId ? 'corporate_package' : 'house_comped',
+        meter_type: 'unlimited',
+      },
+    });
+
     const sharedAccessCode = await generateAccessCode(admin, venue.id, date);
     let bookings: any[];
     try {
@@ -4442,6 +4499,8 @@ Deno.serve(async (req) => {
         participation_funding_source_type: validCorporatePackageId ? 'corporate_package' : 'zero_price_product',
         participation_funding_source_id: validCorporatePackageId || `venue:${venue.id}:zero_price_resource`,
         participation_funder: validCorporatePackageId ? 'employer' : 'house_comped',
+        customer_id: bookingCustomerId,
+        cancellation_policy_snapshot_id: cancellationSnapshot.id,
         access_code: sharedAccessCode,
         access_code_expires_at: endISO,
       })));
@@ -4721,30 +4780,40 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (registrationError) return errorResponse(registrationError.message, 500);
       if (!registration) return errorResponse('Activity participant not found', 404);
-      const { data: commerceLine, error: commerceLineError } = await admin.from('commerce_order_lines')
-        .select('commerce_order_id')
-        .eq('session_registration_id', registrationId)
-        .eq('commerce_kind', 'participation')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (commerceLineError) return errorResponse(commerceLineError.message, 500);
-      const result = await cancelActivityRegistrationParticipation(admin, {
-        registrationId,
-        orderId: commerceLine?.commerce_order_id || null,
+      const { data: preview, error: previewError } = await admin.rpc('cancellation_subject_state', {
+        p_subject_type: 'activity_registration',
+        p_subject_id: registrationId,
+        p_actor_user_id: userId,
+        p_staff_override: true,
+        p_now: new Date().toISOString(),
+        p_staff_refund_choice: 'none',
+        p_staff_restore_choice: 'none',
+      });
+      if (previewError) return errorResponse(previewError.message, 409);
+      const runtime = cancellationRuntimeAllowNoRefund();
+      const result = await confirmCancellationAndDispatchRefund({
+        admin,
+        subjectType: 'activity_registration',
+        subjectId: registrationId,
         actorUserId: userId,
-        source: 'staff',
-        reason,
+        expectedRevision: preview.state_revision,
         requestId: req.headers.get('x-request-id') || crypto.randomUUID(),
+        staffOverride: true,
+        staffReason: reason,
+        staffRefundChoice: 'none',
+        staffRestoreChoice: 'none',
+        stripeKey: runtime.stripeKey,
+        stripeMode: runtime.stripeMode,
       });
       return jsonResponse({
         ok: true,
         already_cancelled: registration.status === 'cancelled',
-        participation_status: result.registration_status,
+        cancellation_policy_v1: true,
+        participation_status: 'cancelled',
         has_place: false,
-        financial_state: result.financial_state,
-        payment_action_required: result.financial_state === 'paid_not_refunded',
-        available_count: result.available_count,
+        financial_state: 'staff_selected_no_refund',
+        payment_action_required: false,
+        refund_status: result.refundStatus,
       }, 200, 0);
     }
 
@@ -5744,7 +5813,7 @@ Deno.serve(async (req) => {
 
       const { data: participant, error: participantErr } = await admin
         .from('booking_participants')
-        .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, price_minor, payment_status, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
+        .select('id, venue_id, booking_id, booking_group_key, customer_id, user_id, display_name, role, price_minor, payment_status, checked_in_at, cancellation_policy_snapshot_id, metadata, bookings(id, booking_ref, venue_id, venue_court_id, user_id, customer_id, start_time, end_time, status, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, open_for_more_pace, open_for_more_note, open_for_more_published_at, open_for_more_closed_at)')
         .eq('id', resolvedParticipantId)
         .maybeSingle();
       if (participantErr) return errorResponse(participantErr.message, 500);
@@ -5760,18 +5829,51 @@ Deno.serve(async (req) => {
       }
 
       const booking = Array.isArray(participant.bookings) ? participant.bookings[0] : participant.bookings;
-      const before = { payment_status: participant.payment_status, checked_in_at: (participant as any).checked_in_at || null };
-      const nextMetadata = {
-        ...(participant.metadata || {}),
-        cancelled_at: new Date().toISOString(),
-        cancelled_by_user_id: userId,
-        cancellation_scope: 'participant_place',
-      };
-      try {
-        await cancelBookingParticipantCapacity(admin, participant.id, userId, nextMetadata);
-      } catch (updateErr) {
-        return errorResponse((updateErr as Error).message, 500);
+      const staffOverride = !canCancelOwn && canOperate;
+      const staffReason = staffOverride ? String(body.reason || '').trim().slice(0, 500) : null;
+      if (staffOverride && (!staffReason || staffReason.length < 3)) {
+        return errorResponse('Staff cancellation reason is required', 400);
       }
+      const { data: preview, error: previewError } = await admin.rpc('cancellation_subject_state', {
+        p_subject_type: 'booking_participant',
+        p_subject_id: participant.id,
+        p_actor_user_id: userId,
+        p_staff_override: staffOverride,
+        p_now: new Date().toISOString(),
+        p_staff_refund_choice: staffOverride ? 'none' : 'policy',
+        p_staff_restore_choice: staffOverride ? 'none' : 'policy',
+      });
+      if (previewError) return errorResponse(previewError.message, 409);
+
+      const paid = Number(participant.price_minor || 0) > 0 && participant.payment_status === 'paid';
+      const isLegacyManual = preview?.provenance === 'legacy_ambiguous' && preview?.refund_mode === 'manual_legacy';
+      if (!staffOverride && (preview?.allowed !== true || (paid && !isLegacyManual))) {
+        const { payer_user_id: _payerUserId, payer_customer_id: _payerCustomerId,
+          stripe_payment_intent_id: _paymentIntentId, ...safePreview } = preview || {};
+        return jsonResponse({
+          code: 'cancellation_policy_confirmation_required',
+          error: 'Avbokningskonsekvensen måste bekräftas i den uppdaterade Pickla-vyn.',
+          mismatch_classification: paid ? 'EXPECTED_POLICY_CHANGE' : null,
+          preview: safePreview,
+        }, 409, 0);
+      }
+
+      const before = { payment_status: participant.payment_status, checked_in_at: participant.checked_in_at || null };
+      const runtime = cancellationRuntimeAllowNoRefund();
+      const result = await confirmCancellationAndDispatchRefund({
+        admin,
+        subjectType: 'booking_participant',
+        subjectId: participant.id,
+        actorUserId: userId,
+        expectedRevision: preview.state_revision,
+        requestId: req.headers.get('x-request-id') || crypto.randomUUID(),
+        staffOverride,
+        staffReason,
+        staffRefundChoice: staffOverride ? 'none' : 'policy',
+        staffRestoreChoice: staffOverride ? 'none' : 'policy',
+        stripeKey: runtime.stripeKey,
+        stripeMode: runtime.stripeMode,
+      });
 
       await removeBookingChatMembership(admin, booking, participant);
       await auditMutation(admin, {
@@ -5788,7 +5890,9 @@ Deno.serve(async (req) => {
 
       return jsonResponse({
         ok: true,
-        refund_note: Number(participant.price_minor || 0) > 0 && participant.payment_status === 'paid'
+        cancellation_policy_v1: true,
+        refund_status: result.refundStatus,
+        refund_note: isLegacyManual
           ? 'Kontakta oss för återbetalning'
           : null,
       }, 200, 0);
@@ -6477,6 +6581,66 @@ Deno.serve(async (req) => {
       const { bookingId, status, notes } = body;
       if (!bookingId) return errorResponse('Missing bookingId');
 
+      if (status === 'cancelled') {
+        const admin = getServiceClient();
+        const { data: booking, error: bookingError } = await admin.from('bookings')
+          .select('id,venue_id,user_id,booked_by,status,included_court_hours,cancellation_policy_snapshot_id')
+          .eq('id', bookingId).maybeSingle();
+        if (bookingError || !booking) return errorResponse(bookingError?.message || 'Booking not found', 404);
+        const owner = booking.user_id === userId || booking.booked_by === userId;
+        const staffOverride = !owner && await canOperateVenue(admin, userId, booking.venue_id);
+        if (!owner && !staffOverride) return errorResponse('Forbidden', 403);
+        const staffReason = staffOverride ? String(body.reason || '').trim().slice(0, 500) : null;
+        if (staffOverride && (!staffReason || staffReason.length < 3)) {
+          return errorResponse('Staff cancellation reason is required', 400);
+        }
+        const staffRestoreChoice = staffOverride && Number(booking.included_court_hours || 0) > 0 ? 'restore' : staffOverride ? 'none' : 'policy';
+        const { data: preview, error: previewError } = await admin.rpc('cancellation_subject_state', {
+          p_subject_type: 'court_booking',
+          p_subject_id: booking.id,
+          p_actor_user_id: userId,
+          p_staff_override: staffOverride,
+          p_now: new Date().toISOString(),
+          p_staff_refund_choice: staffOverride ? 'none' : 'policy',
+          p_staff_restore_choice: staffRestoreChoice,
+        });
+        if (previewError) return errorResponse(previewError.message, 409);
+        const preservesLegacyConsequence = preview?.allowed === true
+          && preview?.refund_mode === 'none'
+          && (Number(booking.included_court_hours || 0) > 0
+            ? preview?.entitlement_restore_mode === 'measurable'
+            : preview?.entitlement_restore_mode !== 'measurable');
+        if (!staffOverride && !preservesLegacyConsequence) {
+          const { payer_user_id: _payerUserId, payer_customer_id: _payerCustomerId,
+            stripe_payment_intent_id: _paymentIntentId, ...safePreview } = preview || {};
+          return jsonResponse({
+            code: 'cancellation_policy_confirmation_required',
+            error: 'Avbokningskonsekvensen måste bekräftas i den uppdaterade Pickla-vyn.',
+            mismatch_classification: 'EXPECTED_POLICY_CHANGE',
+            preview: safePreview,
+          }, 409, 0);
+        }
+        const runtime = cancellationRuntimeAllowNoRefund();
+        await confirmCancellationAndDispatchRefund({
+          admin,
+          subjectType: 'court_booking',
+          subjectId: booking.id,
+          actorUserId: userId,
+          expectedRevision: preview.state_revision,
+          requestId: req.headers.get('x-request-id') || crypto.randomUUID(),
+          staffOverride,
+          staffReason,
+          staffRefundChoice: staffOverride ? 'none' : 'policy',
+          staffRestoreChoice,
+          stripeKey: runtime.stripeKey,
+          stripeMode: runtime.stripeMode,
+        });
+        const { data: cancelled, error: cancelledError } = await admin.from('bookings')
+          .select('*').eq('id', booking.id).single();
+        if (cancelledError) return errorResponse(cancelledError.message, 500);
+        return jsonResponse(cancelled);
+      }
+
       const updates: Record<string, any> = {};
       if (status) updates.status = status;
       if (notes !== undefined) updates.notes = notes;
@@ -6501,13 +6665,18 @@ Deno.serve(async (req) => {
       const admin = getServiceClient();
       const { data: rows, error: rowsErr } = await admin
         .from('bookings')
-        .select('id, booking_ref, venue_id, user_id, booked_by, status, start_time, end_time, total_price, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, included_court_hours, membership_usage_period_start, membership_usage_period_end, venue_courts(sport_type)')
+        .select('id, booking_ref, venue_id, user_id, booked_by, status, start_time, end_time, total_price, notes, access_code, stripe_session_id, open_for_more_status, open_for_more_total_players, open_for_more_opened_places, open_for_more_public_capacity, open_for_more_committed_at_publication, included_court_hours, membership_usage_period_start, membership_usage_period_end, cancellation_policy_snapshot_id, venue_courts(sport_type)')
         .in('id', ids);
       if (rowsErr) return errorResponse(rowsErr.message, 500);
       if (!rows?.length) return errorResponse('Booking not found', 404);
 
       const requestedIds = new Set(ids.map(String));
       if (rows.length !== requestedIds.size) return errorResponse('One or more bookings were not found', 404);
+      if (new Set(rows.map((row: { cancellation_policy_snapshot_id?: string | null }) =>
+        row.cancellation_policy_snapshot_id)).size !== 1
+        || !rows[0].cancellation_policy_snapshot_id) {
+        return errorResponse('Bookings must belong to one snapshotted cancellation group', 409);
+      }
 
       const venueIds = Array.from(new Set(rows.map((row: any) => row.venue_id).filter(Boolean)));
       const userOwnsAll = rows.every((row: any) => row.user_id === userId || row.booked_by === userId);
@@ -6580,16 +6749,71 @@ Deno.serve(async (req) => {
         }
       }
 
-      await refundMembershipCourtHours(admin, rows || []);
+      const includedHours = (rows || []).reduce(
+        (sum: number, row: { included_court_hours?: number | null }) =>
+          sum + Number(row.included_court_hours || 0),
+        0,
+      );
+      const staffReason = staffCanCancel && !userOwnsAll
+        ? String(body.reason || '').trim().slice(0, 500)
+        : null;
+      if (staffCanCancel && !userOwnsAll && (!staffReason || staffReason.length < 3)) {
+        return errorResponse('Staff cancellation reason is required', 400);
+      }
+      const staffOverride = staffCanCancel && !userOwnsAll;
+      const staffRestoreChoice = staffOverride && includedHours > 0 ? 'restore' : staffOverride ? 'none' : 'policy';
+      const { data: preview, error: previewError } = await admin.rpc('cancellation_subject_state', {
+        p_subject_type: 'court_booking',
+        p_subject_id: rows[0].id,
+        p_actor_user_id: userId,
+        p_staff_override: staffOverride,
+        p_now: new Date().toISOString(),
+        p_staff_refund_choice: staffOverride ? 'none' : 'policy',
+        p_staff_restore_choice: staffRestoreChoice,
+      });
+      if (previewError) return errorResponse(previewError.message, 409);
 
-      const { data, error: cancelErr } = await admin
-        .from('bookings')
-        .update({ status: 'cancelled' })
-        .in('id', ids)
-        .select('id, status, booking_ref');
-      if (cancelErr) return errorResponse(cancelErr.message, 500);
+      const preservesLegacyConsequence = preview?.allowed === true
+        && preview?.refund_mode === 'none'
+        && (includedHours > 0
+          ? preview?.entitlement_restore_mode === 'measurable'
+          : preview?.entitlement_restore_mode !== 'measurable');
+      if (!staffOverride && !preservesLegacyConsequence) {
+        const { payer_user_id: _payerUserId, payer_customer_id: _payerCustomerId,
+          stripe_payment_intent_id: _paymentIntentId, ...safePreview } = preview || {};
+        return jsonResponse({
+          code: 'cancellation_policy_confirmation_required',
+          error: 'Avbokningskonsekvensen måste bekräftas i den uppdaterade Pickla-vyn.',
+          mismatch_classification: 'EXPECTED_POLICY_CHANGE',
+          preview: safePreview,
+        }, 409, 0);
+      }
 
-      return jsonResponse({ success: true, cancelled: data || [] });
+      const runtime = cancellationRuntimeAllowNoRefund();
+      const result = await confirmCancellationAndDispatchRefund({
+        admin,
+        subjectType: 'court_booking',
+        subjectId: rows[0].id,
+        actorUserId: userId,
+        expectedRevision: preview.state_revision,
+        requestId: req.headers.get('x-request-id') || crypto.randomUUID(),
+        staffOverride,
+        staffReason,
+        staffRefundChoice: staffOverride ? 'none' : 'policy',
+        staffRestoreChoice,
+        stripeKey: runtime.stripeKey,
+        stripeMode: runtime.stripeMode,
+      });
+      const { data: cancelled, error: cancelledError } = await admin.from('bookings')
+        .select('id,status,booking_ref')
+        .eq('cancellation_policy_snapshot_id', preview.snapshot_id);
+      if (cancelledError) return errorResponse(cancelledError.message, 500);
+      return jsonResponse({
+        success: true,
+        cancellation_policy_v1: true,
+        cancelled: cancelled || [],
+        refund_status: result.refundStatus,
+      });
     }
 
     return errorResponse('Not found', 404);
