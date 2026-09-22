@@ -82,6 +82,7 @@ function seedMyPageQueries(queryClient: QueryClient, input: {
       subject_type: "activity_registration",
       subject_id: registration.id,
       venue_id: registration.venue_id,
+      policy_mode: "policy_v1",
       snapshot_id: "snapshot-id",
       policy_family: "occurrence_ticket",
       policy_key: "standard_12h",

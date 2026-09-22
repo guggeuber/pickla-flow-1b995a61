@@ -996,7 +996,30 @@ Deno.serve(async (req) => {
                 continue;
               }
 
+              const bookingId = crypto.randomUUID();
+              const { data: cancellationSnapshot, error: cancellationSnapshotError } = await serviceClient
+                .rpc('create_cancellation_policy_snapshot', {
+                  p_venue_id: order.venue_id,
+                  p_policy_family: 'court_booking',
+                  p_purchase_reference_type: 'booking',
+                  p_purchase_reference_id: bookingId,
+                  p_start_at: startISO,
+                  p_registration_close_at: null,
+                  p_access_product_id: null,
+                  p_activity_series_id: null,
+                  p_event_id: null,
+                  p_payer_user_id: userId,
+                  p_payer_customer_id: null,
+                  p_payment_provenance: { amount_minor: 0, currency: 'SEK', corporate_order_id: order.id },
+                  p_funding_provenance: { funding_type: 'corporate_order', funder: 'employer', meter_type: 'unlimited' },
+                }).single();
+              const typedCancellationSnapshot = cancellationSnapshot as { id?: string } | null;
+              if (cancellationSnapshotError || !typedCancellationSnapshot?.id) {
+                return errorResponse(cancellationSnapshotError?.message || 'Cancellation policy snapshot could not be created', 500);
+              }
+
               const { data: booking } = await serviceClient.from('bookings').insert({
+                id: bookingId,
                 venue_id: order.venue_id,
                 venue_court_id: courtId,
                 user_id: userId,
@@ -1010,6 +1033,7 @@ Deno.serve(async (req) => {
                 participation_funding_source_type: 'corporate_order',
                 participation_funding_source_id: order.id,
                 participation_funder: 'employer',
+                cancellation_policy_snapshot_id: typedCancellationSnapshot.id,
               }).select('id').single();
 
               if (booking) {

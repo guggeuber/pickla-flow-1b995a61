@@ -47,7 +47,8 @@ function rpcErrorStatus(message: string) {
   if (message.includes('cancellation_not_allowed') || message.includes('already_cancelled')) return 409;
   if (message.includes('owner_mismatch') || message.includes('Forbidden')) return 403;
   if (message.includes('not_found')) return 404;
-  if (message.includes('snapshot_missing') || message.includes('payment_intent_missing')) return 409;
+  if (message.includes('snapshot_missing') || message.includes('snapshot_required_after_cutover')
+    || message.includes('payment_intent_missing')) return 409;
   return 400;
 }
 
@@ -192,6 +193,8 @@ export const cancellationsHandler = async (req: Request) => {
         { data: policies, error: policyError },
         { data: bindings, error: bindingError },
         { data: decisions, error: decisionError },
+        { data: cutovers, error: cutoverError },
+        { data: rolloutPreflight, error: preflightError },
       ] = await Promise.all([
         admin.from('cancellation_policies').select('id,policy_key,policy_family,name,cancellation_policy_versions(*)')
           .eq('venue_id', venueId).order('policy_family'),
@@ -199,9 +202,13 @@ export const cancellationsHandler = async (req: Request) => {
           .eq('venue_id', venueId).eq('is_active', true).order('policy_family'),
         admin.from('cancellation_decisions').select('*').eq('venue_id', venueId)
           .order('created_at', { ascending: false }).limit(100),
+        admin.from('cancellation_policy_cutovers').select('*').eq('venue_id', venueId)
+          .order('authority_key'),
+        admin.rpc('cancellation_policy_rollout_preflight', { p_venue_id: venueId }),
       ]);
-      if (policyError || bindingError || decisionError) {
-        throw new Error(policyError?.message || bindingError?.message || decisionError?.message);
+      if (policyError || bindingError || decisionError || cutoverError || preflightError) {
+        throw new Error(policyError?.message || bindingError?.message || decisionError?.message
+          || cutoverError?.message || preflightError?.message);
       }
       const decisionRows = (decisions || []) as JsonRecord[];
       const snapshotIds = [...new Set(decisionRows.map((decision) => decision.snapshot_id).filter(Boolean))];
@@ -218,6 +225,8 @@ export const cancellationsHandler = async (req: Request) => {
       return privateJsonResponse({
         policies: policies || [],
         bindings: bindings || [],
+        cutovers: cutovers || [],
+        rollout_preflight: rolloutPreflight || null,
         decisions: decisions || [],
         snapshots: snapshots || [],
         refunds: refunds || [],

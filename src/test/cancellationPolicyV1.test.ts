@@ -17,6 +17,7 @@ function decision(overrides: Partial<CancellationDecision> = {}): CancellationDe
     subject_type: "activity_registration",
     subject_id: "00000000-0000-4000-8000-000000000001",
     venue_id: "00000000-0000-4000-8000-000000000002",
+    policy_mode: "policy_v1",
     snapshot_id: "00000000-0000-4000-8000-000000000003",
     policy_family: "occurrence_ticket",
     policy_key: "standard_12h",

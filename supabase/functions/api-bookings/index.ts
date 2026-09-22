@@ -67,6 +67,7 @@ import {
 } from '../_shared/physical_availability.ts';
 import { requireStripeRuntimeEnvironment } from '../_shared/stripe_environment.ts';
 import { confirmCancellationAndDispatchRefund } from '../_shared/cancellation_execution.ts';
+import { legacyCancellationProjection } from '../_shared/cancellation_cutover.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -723,8 +724,9 @@ async function createBookingFlowCancellationSnapshot(admin: ServiceClient, input
     },
     p_funding_provenance: input.funding || {},
   }).maybeSingle();
-  if (error || !data?.id) throw new Error(error?.message || 'Cancellation policy snapshot could not be created');
-  return data;
+  const snapshot = data as { id?: string } | null;
+  if (error || !snapshot?.id) throw new Error(error?.message || 'Cancellation policy snapshot could not be created');
+  return snapshot as { id: string };
 }
 
 async function acquireBookingParticipantPaymentHold(
@@ -4079,11 +4081,21 @@ Deno.serve(async (req) => {
         has_place: participant.has_place,
       }));
 
-    const { data: cancellationPolicy } = booking.cancellation_policy_snapshot_id
-      ? await admin.from('cancellation_policy_snapshots')
-          .select('policy_key,policy_version,policy_family,provenance,rules,copy_sv,copy_en,cancel_deadline_at,refund_deadline_at')
-          .eq('id', booking.cancellation_policy_snapshot_id).maybeSingle()
-      : { data: null };
+    let cancellationPolicy: Record<string, unknown> | null = null;
+    if (booking.cancellation_policy_snapshot_id) {
+      const { data, error: cancellationPolicyError } = await admin.from('cancellation_policy_snapshots')
+        .select('id,authority_key,policy_key,policy_version,policy_family,provenance,rules,copy_sv,copy_en,cancel_deadline_at,refund_deadline_at,terms_accepted_at')
+        .eq('id', booking.cancellation_policy_snapshot_id).maybeSingle();
+      if (cancellationPolicyError) throw new Error(cancellationPolicyError.message);
+      cancellationPolicy = data ? { ...data, policy_mode: 'policy_v1', source: 'purchase_snapshot' } : null;
+    } else {
+      cancellationPolicy = await legacyCancellationProjection(admin, {
+        venueId: booking.venue_id,
+        authorityKey: 'court_booking',
+        policyFamily: 'court_booking',
+        purchaseAt: booking.created_at,
+      });
+    }
 
     return jsonResponse({
       booking,
@@ -4808,7 +4820,8 @@ Deno.serve(async (req) => {
       return jsonResponse({
         ok: true,
         already_cancelled: registration.status === 'cancelled',
-        cancellation_policy_v1: true,
+        cancellation_policy_v1: preview.policy_mode === 'policy_v1',
+        cancellation_policy_mode: preview.policy_mode,
         participation_status: 'cancelled',
         has_place: false,
         financial_state: 'staff_selected_no_refund',
@@ -5846,7 +5859,7 @@ Deno.serve(async (req) => {
       if (previewError) return errorResponse(previewError.message, 409);
 
       const paid = Number(participant.price_minor || 0) > 0 && participant.payment_status === 'paid';
-      const isLegacyManual = preview?.provenance === 'legacy_ambiguous' && preview?.refund_mode === 'manual_legacy';
+      const isLegacyManual = preview?.policy_mode === 'legacy' && preview?.refund_mode === 'manual_legacy';
       if (!staffOverride && (preview?.allowed !== true || (paid && !isLegacyManual))) {
         const { payer_user_id: _payerUserId, payer_customer_id: _payerCustomerId,
           stripe_payment_intent_id: _paymentIntentId, ...safePreview } = preview || {};
@@ -5890,7 +5903,8 @@ Deno.serve(async (req) => {
 
       return jsonResponse({
         ok: true,
-        cancellation_policy_v1: true,
+        cancellation_policy_v1: preview.policy_mode === 'policy_v1',
+        cancellation_policy_mode: preview.policy_mode,
         refund_status: result.refundStatus,
         refund_note: isLegacyManual
           ? 'Kontakta oss för återbetalning'
@@ -6553,9 +6567,23 @@ Deno.serve(async (req) => {
       const serviceClient = getServiceClient();
       const accessCode = await generateAccessCode(serviceClient, venueId, bookingDate);
       const customerId = await resolveCustomerIdForUser(serviceClient, userId);
+      const bookingId = crypto.randomUUID();
+      const cancellationSnapshot = await createBookingFlowCancellationSnapshot(serviceClient, {
+        venueId,
+        family: 'court_booking',
+        purchaseReferenceType: 'booking',
+        purchaseReferenceId: bookingId,
+        startAt: startTime,
+        payerUserId: userId,
+        payerCustomerId: customerId,
+        amountMinor: Math.round(Number(totalPrice || 0) * 100),
+        currency: 'SEK',
+        funding: {},
+      });
 
       try {
         const [booking] = await claimPhysicalBookings(serviceClient, venueId, [{
+          id: bookingId,
           venue_id: venueId,
           venue_court_id: venueCourtId,
           customer_id: customerId,
@@ -6568,6 +6596,7 @@ Deno.serve(async (req) => {
           notes,
           access_code: accessCode,
           access_code_expires_at: endTime,
+          cancellation_policy_snapshot_id: cancellationSnapshot.id,
         }]);
         return jsonResponse(booking, 201);
       } catch (error) {
@@ -6672,10 +6701,13 @@ Deno.serve(async (req) => {
 
       const requestedIds = new Set(ids.map(String));
       if (rows.length !== requestedIds.size) return errorResponse('One or more bookings were not found', 404);
-      if (new Set(rows.map((row: { cancellation_policy_snapshot_id?: string | null }) =>
-        row.cancellation_policy_snapshot_id)).size !== 1
-        || !rows[0].cancellation_policy_snapshot_id) {
-        return errorResponse('Bookings must belong to one snapshotted cancellation group', 409);
+      const snapshotIds = new Set(rows.map((row: { cancellation_policy_snapshot_id?: string | null }) =>
+        row.cancellation_policy_snapshot_id || null));
+      const allPolicyV1 = snapshotIds.size === 1 && Boolean(rows[0].cancellation_policy_snapshot_id);
+      const allLegacy = snapshotIds.size === 1 && !rows[0].cancellation_policy_snapshot_id;
+      const legacyGroupKeys = new Set(rows.map((row) => bookingGroupKey(row)));
+      if ((!allPolicyV1 && !allLegacy) || (allLegacy && legacyGroupKeys.size !== 1)) {
+        return errorResponse('Bookings must belong to one cancellation contract group', 409);
       }
 
       const venueIds = Array.from(new Set(rows.map((row: any) => row.venue_id).filter(Boolean)));
@@ -6806,11 +6838,12 @@ Deno.serve(async (req) => {
       });
       const { data: cancelled, error: cancelledError } = await admin.from('bookings')
         .select('id,status,booking_ref')
-        .eq('cancellation_policy_snapshot_id', preview.snapshot_id);
+        .in('id', rows.map((row) => row.id));
       if (cancelledError) return errorResponse(cancelledError.message, 500);
       return jsonResponse({
         success: true,
-        cancellation_policy_v1: true,
+        cancellation_policy_v1: preview.policy_mode === 'policy_v1',
+        cancellation_policy_mode: preview.policy_mode,
         cancelled: cancelled || [],
         refund_status: result.refundStatus,
       });

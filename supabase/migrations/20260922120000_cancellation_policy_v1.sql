@@ -84,6 +84,32 @@ CREATE UNIQUE INDEX cancellation_policy_active_binding
     venue_id, policy_family, subject_type, COALESCE(subject_id, '00000000-0000-0000-0000-000000000000'::UUID)
   ) WHERE is_active;
 
+-- A durable schema/config boundary, not an inferred deploy timestamp.  Only
+-- these seven terms-bearing authorities are in Policy V1. Membership and
+-- merchandise deliberately have no row and therefore remain outside V1.
+CREATE TABLE public.cancellation_policy_cutovers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  venue_id UUID NOT NULL REFERENCES public.venues(id) ON DELETE RESTRICT,
+  authority_key TEXT NOT NULL CHECK (authority_key IN (
+    'occurrence_ticket', 'booking_participant', 'court_booking',
+    'managed_course', 'league_team', 'refundable_event',
+    'non_refundable_event'
+  )),
+  policy_family TEXT NOT NULL CHECK (policy_family IN (
+    'occurrence_ticket', 'booking_participant', 'court_booking',
+    'managed_course', 'league_team', 'event'
+  )),
+  preset_key TEXT NOT NULL CHECK (preset_key IN (
+    'standard_12h', 'court_24h', 'course_48h', 'league_registration_close',
+    'event_24h', 'event_non_refundable'
+  )),
+  schema_version INTEGER NOT NULL DEFAULT 1 CHECK (schema_version = 1),
+  enabled_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (venue_id, authority_key),
+  UNIQUE (id, venue_id)
+);
+
 CREATE TABLE public.cancellation_policy_snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   venue_id UUID NOT NULL REFERENCES public.venues(id) ON DELETE RESTRICT,
@@ -91,14 +117,18 @@ CREATE TABLE public.cancellation_policy_snapshots (
     'occurrence_ticket', 'booking_participant', 'court_booking',
     'managed_course', 'league_team', 'event'
   )),
-  policy_version_id UUID REFERENCES public.cancellation_policy_versions(id) ON DELETE RESTRICT,
+  policy_version_id UUID NOT NULL REFERENCES public.cancellation_policy_versions(id) ON DELETE RESTRICT,
+  cutover_id UUID NOT NULL,
+  authority_key TEXT NOT NULL CHECK (authority_key IN (
+    'occurrence_ticket', 'booking_participant', 'court_booking',
+    'managed_course', 'league_team', 'refundable_event',
+    'non_refundable_event'
+  )),
   policy_key TEXT NOT NULL,
   policy_version INTEGER,
   provenance TEXT NOT NULL CHECK (provenance IN (
-    'family_default', 'access_product', 'activity_series', 'event',
-    'legacy_exact', 'legacy_inferred', 'legacy_ambiguous'
+    'family_default', 'access_product', 'activity_series', 'event'
   )),
-  legacy_classification TEXT CHECK (legacy_classification IN ('exact', 'inferred', 'ambiguous')),
   purchase_reference_type TEXT NOT NULL,
   purchase_reference_id UUID NOT NULL,
   start_at TIMESTAMPTZ,
@@ -114,18 +144,18 @@ CREATE TABLE public.cancellation_policy_snapshots (
   payment_provenance JSONB NOT NULL DEFAULT '{}'::JSONB,
   funding_provenance JSONB NOT NULL DEFAULT '{}'::JSONB,
   resolved_from_binding_id UUID REFERENCES public.cancellation_policy_bindings(id) ON DELETE RESTRICT,
+  terms_accepted_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (purchase_reference_type, purchase_reference_id),
-  CHECK (
-    (policy_version_id IS NOT NULL AND provenance NOT LIKE 'legacy_%')
-    OR (policy_version_id IS NULL AND provenance LIKE 'legacy_%')
-  )
+  FOREIGN KEY (cutover_id, venue_id)
+    REFERENCES public.cancellation_policy_cutovers(id, venue_id) ON DELETE RESTRICT
 );
 
 CREATE TABLE public.cancellation_decisions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   venue_id UUID NOT NULL REFERENCES public.venues(id) ON DELETE RESTRICT,
-  snapshot_id UUID NOT NULL REFERENCES public.cancellation_policy_snapshots(id) ON DELETE RESTRICT,
+  policy_mode TEXT NOT NULL CHECK (policy_mode IN ('policy_v1', 'legacy')),
+  snapshot_id UUID REFERENCES public.cancellation_policy_snapshots(id) ON DELETE RESTRICT,
   subject_type TEXT NOT NULL CHECK (subject_type IN (
     'activity_registration', 'booking_participant', 'court_booking',
     'series_commitment', 'league_team_entry'
@@ -150,6 +180,10 @@ CREATE TABLE public.cancellation_decisions (
   applied_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (subject_type, subject_id, request_id),
+  CHECK (
+    (policy_mode = 'policy_v1' AND snapshot_id IS NOT NULL)
+    OR (policy_mode = 'legacy' AND snapshot_id IS NULL)
+  ),
   CHECK (actor_mode <> 'staff_override' OR length(btrim(COALESCE(staff_reason, ''))) BETWEEN 3 AND 500)
 );
 
@@ -159,12 +193,113 @@ ALTER TABLE public.commerce_order_lines
 ALTER TABLE public.bookings
   ADD COLUMN cancellation_policy_snapshot_id UUID
   REFERENCES public.cancellation_policy_snapshots(id) ON DELETE RESTRICT;
+ALTER TABLE public.bookings
+  ADD COLUMN cancellation_policy_legacy_purchase_at TIMESTAMPTZ,
+  ADD CONSTRAINT bookings_cancellation_contract_identity CHECK (
+    num_nonnulls(cancellation_policy_snapshot_id,cancellation_policy_legacy_purchase_at) <= 1
+  );
 ALTER TABLE public.booking_participants
   ADD COLUMN cancellation_policy_snapshot_id UUID
   REFERENCES public.cancellation_policy_snapshots(id) ON DELETE RESTRICT;
 ALTER TABLE public.session_registrations
   ADD COLUMN cancellation_policy_snapshot_id UUID
   REFERENCES public.cancellation_policy_snapshots(id) ON DELETE RESTRICT;
+
+-- The physical booking command predates Policy V1. Replace it in place so the
+-- snapshot supplied by every new court flow is inserted atomically with the
+-- booking instead of being silently discarded by the JSON command boundary.
+CREATE OR REPLACE FUNCTION public.claim_physical_bookings(
+  p_venue_id UUID,
+  p_claims JSONB
+) RETURNS SETOF public.bookings
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_claim JSONB; v_result JSONB; v_booking public.bookings%ROWTYPE;
+  v_court_ids UUID[]; v_snapshot_id UUID; v_booking_id UUID;
+  v_legacy_purchase_at TIMESTAMPTZ;
+BEGIN
+  IF p_venue_id IS NULL OR jsonb_typeof(p_claims) <> 'array'
+     OR jsonb_array_length(p_claims)=0 OR jsonb_array_length(p_claims)>32 THEN
+    RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='invalid_physical_booking_claim';
+  END IF;
+  SELECT array_agg(DISTINCT (claim->>'venue_court_id')::UUID ORDER BY (claim->>'venue_court_id')::UUID)
+  INTO v_court_ids FROM jsonb_array_elements(p_claims) claim
+  WHERE NULLIF(claim->>'venue_court_id','') IS NOT NULL;
+  IF cardinality(COALESCE(v_court_ids,'{}'::UUID[]))=0 OR EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p_claims) claim
+    WHERE NULLIF(claim->>'venue_id','')::UUID IS DISTINCT FROM p_venue_id
+      OR NULLIF(claim->>'venue_court_id','') IS NULL
+      OR NULLIF(claim->>'user_id','') IS NULL
+      OR NULLIF(claim->>'start_time','') IS NULL
+      OR NULLIF(claim->>'end_time','') IS NULL
+      OR num_nonnulls(NULLIF(claim->>'cancellation_policy_snapshot_id',''),
+        NULLIF(claim->>'cancellation_policy_legacy_purchase_at','')) <> 1
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='physical_booking_claim_identity_invalid';
+  END IF;
+  PERFORM public.lock_physical_resources(p_venue_id,v_court_ids);
+  FOR v_claim IN SELECT value FROM jsonb_array_elements(p_claims)
+  LOOP
+    v_snapshot_id := NULLIF(v_claim->>'cancellation_policy_snapshot_id','')::UUID;
+    v_legacy_purchase_at := NULLIF(v_claim->>'cancellation_policy_legacy_purchase_at','')::TIMESTAMPTZ;
+    IF v_snapshot_id IS NOT NULL THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM public.cancellation_policy_snapshots snapshot
+        JOIN public.cancellation_policy_cutovers cutover ON cutover.id=snapshot.cutover_id
+        WHERE snapshot.id=v_snapshot_id AND snapshot.venue_id=p_venue_id
+          AND snapshot.policy_family='court_booking'
+          AND snapshot.authority_key='court_booking'
+          AND snapshot.terms_accepted_at >= cutover.enabled_at
+      ) THEN RAISE EXCEPTION 'cancellation_policy_snapshot_mismatch'; END IF;
+    ELSIF NOT EXISTS (
+      SELECT 1 FROM public.cancellation_policy_cutovers cutover
+      WHERE cutover.venue_id=p_venue_id AND cutover.authority_key='court_booking'
+        AND v_legacy_purchase_at < cutover.enabled_at
+    ) THEN
+      RAISE EXCEPTION 'cancellation_policy_snapshot_required_after_cutover:court_booking';
+    END IF;
+    v_result := public.check_physical_availability(
+      p_venue_id,ARRAY[(v_claim->>'venue_court_id')::UUID],
+      (v_claim->>'start_time')::TIMESTAMPTZ,(v_claim->>'end_time')::TIMESTAMPTZ
+    );
+    IF NOT COALESCE((v_result->>'available')::BOOLEAN,false) THEN
+      RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='physical_availability_conflict',DETAIL=v_result::TEXT;
+    END IF;
+    v_booking_id := COALESCE(NULLIF(v_claim->>'id','')::UUID,gen_random_uuid());
+    INSERT INTO public.bookings (
+      id, venue_id, venue_court_id, user_id, start_time, end_time, status,
+      total_price, currency, notes, booked_by, booking_ref,
+      corporate_package_id, access_code, access_code_expires_at,
+      stripe_session_id, membership_id, included_court_hours,
+      paid_court_hours, membership_usage_entitlement_type,
+      membership_usage_period_start, membership_usage_period_end, customer_id,
+      participation_funding_mode, participation_funding_source_type,
+      participation_funding_source_id, participation_funder,
+      cancellation_policy_snapshot_id,cancellation_policy_legacy_purchase_at
+    ) VALUES (
+      v_booking_id,p_venue_id,(v_claim->>'venue_court_id')::UUID,(v_claim->>'user_id')::UUID,
+      (v_claim->>'start_time')::TIMESTAMPTZ,(v_claim->>'end_time')::TIMESTAMPTZ,
+      COALESCE(NULLIF(v_claim->>'status',''),'confirmed')::public.booking_status,
+      NULLIF(v_claim->>'total_price','')::NUMERIC,COALESCE(NULLIF(v_claim->>'currency',''),'SEK'),
+      v_claim->>'notes',NULLIF(v_claim->>'booked_by','')::UUID,NULLIF(v_claim->>'booking_ref',''),
+      NULLIF(v_claim->>'corporate_package_id','')::UUID,NULLIF(v_claim->>'access_code',''),
+      NULLIF(v_claim->>'access_code_expires_at','')::TIMESTAMPTZ,
+      NULLIF(v_claim->>'stripe_session_id',''),NULLIF(v_claim->>'membership_id','')::UUID,
+      COALESCE(NULLIF(v_claim->>'included_court_hours','')::NUMERIC,0),
+      COALESCE(NULLIF(v_claim->>'paid_court_hours','')::NUMERIC,0),
+      NULLIF(v_claim->>'membership_usage_entitlement_type',''),
+      NULLIF(v_claim->>'membership_usage_period_start','')::DATE,
+      NULLIF(v_claim->>'membership_usage_period_end','')::DATE,
+      NULLIF(v_claim->>'customer_id','')::UUID,
+      COALESCE(NULLIF(v_claim->>'participation_funding_mode',''),'unresolved'),
+      NULLIF(v_claim->>'participation_funding_source_type',''),
+      NULLIF(v_claim->>'participation_funding_source_id',''),
+      NULLIF(v_claim->>'participation_funder',''),v_snapshot_id,v_legacy_purchase_at
+    ) RETURNING * INTO v_booking;
+    RETURN NEXT v_booking;
+  END LOOP;
+END;
+$$;
 
 CREATE INDEX cancellation_snapshots_venue_created
   ON public.cancellation_policy_snapshots (venue_id, created_at DESC);
@@ -203,6 +338,34 @@ $$;
 CREATE TRIGGER attach_registration_cancellation_snapshot
   BEFORE INSERT OR UPDATE OF metadata ON public.session_registrations
   FOR EACH ROW EXECUTE FUNCTION public.attach_registration_cancellation_snapshot();
+
+CREATE OR REPLACE FUNCTION public.enforce_new_booking_cancellation_contract()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+DECLARE v_enabled_at TIMESTAMPTZ;
+BEGIN
+  IF NEW.status::TEXT <> 'confirmed' THEN RETURN NEW; END IF;
+  SELECT enabled_at INTO v_enabled_at FROM public.cancellation_policy_cutovers
+  WHERE venue_id=NEW.venue_id AND authority_key='court_booking';
+  IF v_enabled_at IS NULL THEN RAISE EXCEPTION 'cancellation_policy_family_not_enabled:court_booking'; END IF;
+  IF NEW.cancellation_policy_snapshot_id IS NOT NULL THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.cancellation_policy_snapshots snapshot
+      WHERE snapshot.id=NEW.cancellation_policy_snapshot_id
+        AND snapshot.venue_id=NEW.venue_id
+        AND snapshot.authority_key='court_booking'
+        AND snapshot.terms_accepted_at >= v_enabled_at
+    ) THEN RAISE EXCEPTION 'cancellation_policy_snapshot_mismatch'; END IF;
+  ELSIF NEW.cancellation_policy_legacy_purchase_at IS NULL
+    OR NEW.cancellation_policy_legacy_purchase_at >= v_enabled_at THEN
+    RAISE EXCEPTION 'cancellation_policy_snapshot_required_after_cutover:court_booking';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER enforce_new_booking_cancellation_contract
+  BEFORE INSERT OR UPDATE OF status,cancellation_policy_snapshot_id,cancellation_policy_legacy_purchase_at
+  ON public.bookings FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_new_booking_cancellation_contract();
 
 -- R2A stays the only refund command/reconciliation engine. Cancellation adds
 -- a receipt target for legacy booking/co-player payments and a decision link.
@@ -329,6 +492,21 @@ BEGIN
       ) WHERE is_active DO NOTHING;
     END IF;
   END LOOP;
+
+  INSERT INTO public.cancellation_policy_cutovers (
+    venue_id, authority_key, policy_family, preset_key, enabled_at
+  )
+  SELECT p_venue_id, authority_key, policy_family, preset_key, now()
+  FROM (VALUES
+    ('occurrence_ticket', 'occurrence_ticket', 'standard_12h'),
+    ('booking_participant', 'booking_participant', 'standard_12h'),
+    ('court_booking', 'court_booking', 'court_24h'),
+    ('managed_course', 'managed_course', 'course_48h'),
+    ('league_team', 'league_team', 'league_registration_close'),
+    ('refundable_event', 'event', 'event_24h'),
+    ('non_refundable_event', 'event', 'event_non_refundable')
+  ) AS enabled(authority_key, policy_family, preset_key)
+  ON CONFLICT (venue_id, authority_key) DO NOTHING;
 END;
 $$;
 
@@ -371,6 +549,8 @@ DECLARE
   v_binding public.cancellation_policy_bindings%ROWTYPE;
   v_version public.cancellation_policy_versions%ROWTYPE;
   v_policy public.cancellation_policies%ROWTYPE;
+  v_cutover public.cancellation_policy_cutovers%ROWTYPE;
+  v_authority_key TEXT;
   v_anchor TIMESTAMPTZ;
   v_refund_anchor TIMESTAMPTZ;
   v_snapshot public.cancellation_policy_snapshots%ROWTYPE;
@@ -407,6 +587,21 @@ BEGIN
 
   SELECT * INTO v_version FROM public.cancellation_policy_versions WHERE id = v_binding.policy_version_id;
   SELECT * INTO v_policy FROM public.cancellation_policies WHERE id = v_version.policy_id;
+  v_authority_key := CASE
+    WHEN p_policy_family = 'event' AND v_version.preset_key = 'event_24h' THEN 'refundable_event'
+    WHEN p_policy_family = 'event' AND v_version.preset_key = 'event_non_refundable' THEN 'non_refundable_event'
+    ELSE p_policy_family
+  END;
+  SELECT * INTO v_cutover
+  FROM public.cancellation_policy_cutovers cutover
+  WHERE cutover.venue_id = p_venue_id
+    AND cutover.authority_key = v_authority_key
+    AND cutover.policy_family = p_policy_family
+    AND cutover.preset_key = v_version.preset_key
+    AND cutover.schema_version = 1;
+  IF v_cutover.id IS NULL THEN
+    RAISE EXCEPTION 'cancellation_policy_family_not_enabled:%', v_authority_key;
+  END IF;
   v_anchor := CASE v_version.rules->>'cancel_anchor'
     WHEN 'registration_close_at' THEN p_registration_close_at ELSE p_start_at END;
   v_refund_anchor := CASE v_version.rules->>'refund_anchor'
@@ -417,13 +612,16 @@ BEGIN
   END IF;
 
   INSERT INTO public.cancellation_policy_snapshots (
-    venue_id, policy_family, policy_version_id, policy_key, policy_version,
+    venue_id, policy_family, policy_version_id, cutover_id, authority_key,
+    policy_key, policy_version,
     provenance, purchase_reference_type, purchase_reference_id,
     start_at, registration_close_at, cancel_deadline_at, refund_deadline_at,
     rules, copy_sv, copy_en, copy_schema_version, payer_user_id, payer_customer_id,
-    payment_provenance, funding_provenance, resolved_from_binding_id
+    payment_provenance, funding_provenance, resolved_from_binding_id,
+    terms_accepted_at
   ) VALUES (
-    p_venue_id, p_policy_family, v_version.id, v_policy.policy_key, v_version.version,
+    p_venue_id, p_policy_family, v_version.id, v_cutover.id, v_authority_key,
+    v_policy.policy_key, v_version.version,
     v_binding.subject_type, p_purchase_reference_type, p_purchase_reference_id,
     p_start_at, p_registration_close_at,
     v_anchor - make_interval(mins => (v_version.rules->>'cancel_offset_minutes')::INTEGER),
@@ -432,158 +630,11 @@ BEGIN
       ELSE NULL END,
     v_version.rules, v_version.copy_sv, v_version.copy_en, v_version.copy_schema_version,
     p_payer_user_id, p_payer_customer_id, COALESCE(p_payment_provenance, '{}'::JSONB),
-    COALESCE(p_funding_provenance, '{}'::JSONB), v_binding.id
+    COALESCE(p_funding_provenance, '{}'::JSONB), v_binding.id, now()
   ) RETURNING * INTO v_snapshot;
   RETURN v_snapshot;
 END;
 $$;
-
-CREATE OR REPLACE FUNCTION public.create_legacy_cancellation_snapshot(
-  p_venue_id UUID,
-  p_policy_family TEXT,
-  p_purchase_reference_type TEXT,
-  p_purchase_reference_id UUID,
-  p_start_at TIMESTAMPTZ,
-  p_payer_user_id UUID,
-  p_payer_customer_id UUID,
-  p_rules JSONB,
-  p_copy_sv JSONB,
-  p_copy_en JSONB,
-  p_payment_provenance JSONB DEFAULT '{}'::JSONB,
-  p_funding_provenance JSONB DEFAULT '{}'::JSONB
-) RETURNS UUID
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE v_id UUID;
-BEGIN
-  INSERT INTO public.cancellation_policy_snapshots (
-    venue_id, policy_family, policy_key, provenance, legacy_classification,
-    purchase_reference_type, purchase_reference_id, start_at, cancel_deadline_at,
-    refund_deadline_at, rules, copy_sv, copy_en, payer_user_id, payer_customer_id,
-    payment_provenance, funding_provenance
-  ) VALUES (
-    p_venue_id, p_policy_family, 'legacy-preserved', 'legacy_ambiguous', 'ambiguous',
-    p_purchase_reference_type, p_purchase_reference_id, p_start_at,
-    p_start_at, CASE WHEN p_rules->>'refund_mode' = 'automatic' THEN p_start_at ELSE NULL END,
-    p_rules, p_copy_sv, p_copy_en, p_payer_user_id, p_payer_customer_id,
-    COALESCE(p_payment_provenance, '{}'::JSONB), COALESCE(p_funding_provenance, '{}'::JSONB)
-  ) ON CONFLICT (purchase_reference_type, purchase_reference_id) DO NOTHING
-  RETURNING id INTO v_id;
-  IF v_id IS NULL THEN
-    SELECT id INTO v_id FROM public.cancellation_policy_snapshots
-    WHERE purchase_reference_type = p_purchase_reference_type
-      AND purchase_reference_id = p_purchase_reference_id;
-  END IF;
-  RETURN v_id;
-END;
-$$;
-
--- Existing sales did not capture contractual policy provenance. They remain
--- explicitly ambiguous and preserve their previous behavior instead of being
--- silently subjected to a stricter V1 preset.
-DO $$
-DECLARE v_row RECORD; v_snapshot_id UUID; v_family TEXT; v_start TIMESTAMPTZ;
-  v_rules JSONB; v_sv JSONB; v_en JSONB;
-BEGIN
-  v_sv := jsonb_build_object('title','Tidigare köp','summary','Det här köpet gjordes innan versionshanterade avbokningsvillkor infördes. Tidigare villkor bevaras.','late','Ingen ny strängare regel tillämpas retroaktivt.','boundary','Kontakta Pickla om villkoret behöver granskas.');
-  v_en := jsonb_build_object('title','Earlier purchase','summary','This purchase was made before versioned cancellation terms were introduced. Previous behavior is preserved.','late','No new stricter rule is applied retroactively.','boundary','Contact Pickla if the terms need review.');
-
-  FOR v_row IN
-    SELECT line.id, line.activity_series_id, line.league_team_entry_id, line.activity_session_id,
-      line.session_date, line.product_id, line.resolver_snapshot, order_row.venue_id,
-      order_row.user_id, order_row.customer_id, order_row.total_inc_vat_minor,
-      order_row.stripe_payment_intent_id,
-      session.start_time AS occurrence_start_time,
-      series.start_date AS series_start_date, series.start_time AS series_start_time,
-      series.registration_closes_at
-    FROM public.commerce_order_lines line
-    JOIN public.commerce_orders order_row ON order_row.id = line.commerce_order_id
-    LEFT JOIN public.activity_sessions session ON session.id = line.activity_session_id
-    LEFT JOIN public.activity_series series ON series.id = line.activity_series_id
-    WHERE line.commerce_kind = 'participation'
-      AND line.cancellation_policy_snapshot_id IS NULL
-      AND order_row.status IN ('paid', 'attention', 'cancelled')
-  LOOP
-    v_family := CASE WHEN v_row.league_team_entry_id IS NOT NULL THEN 'league_team'
-      WHEN v_row.activity_series_id IS NOT NULL THEN 'managed_course'
-      ELSE 'occurrence_ticket' END;
-    v_start := CASE WHEN v_row.activity_series_id IS NOT NULL
-      THEN ((v_row.series_start_date::TEXT || 'T' || COALESCE(v_row.series_start_time::TEXT, '00:00:00'))::TIMESTAMP AT TIME ZONE 'Europe/Stockholm')
-      ELSE ((v_row.session_date::TEXT || 'T' || COALESCE(v_row.occurrence_start_time::TEXT, '00:00:00'))::TIMESTAMP AT TIME ZONE 'Europe/Stockholm') END;
-    v_rules := jsonb_build_object(
-      'cancel_anchor', CASE WHEN v_family = 'league_team' THEN 'registration_close_at' ELSE 'start_at' END,
-      'cancel_offset_minutes', 0, 'refund_mode', 'automatic', 'refund_percentage', 100,
-      'refund_anchor', CASE WHEN v_family = 'league_team' THEN 'registration_close_at' ELSE 'start_at' END,
-      'refund_offset_minutes', 0, 'refund_comparison', 'strict_before',
-      'entitlement_restore_mode', 'none', 'legacy_behavior', true,
-      'customer_locks', jsonb_build_array('checked_in')
-    );
-    v_snapshot_id := public.create_legacy_cancellation_snapshot(
-      v_row.venue_id, v_family, 'commerce_order_line', v_row.id, v_start,
-      v_row.user_id, v_row.customer_id, v_rules, v_sv, v_en,
-      jsonb_build_object('amount_minor',v_row.total_inc_vat_minor,'payment_intent_id',v_row.stripe_payment_intent_id)
-    );
-    UPDATE public.commerce_order_lines SET cancellation_policy_snapshot_id = v_snapshot_id WHERE id = v_row.id;
-  END LOOP;
-
-  FOR v_row IN
-    SELECT registration.id,registration.venue_id,registration.user_id,registration.customer_id,
-      registration.session_date,registration.stripe_session_id,session.start_time,
-      receipt.id AS receipt_id,receipt.stripe_payment_intent_id,
-      round(COALESCE(receipt.total_inc_vat_sek,receipt.total_inc_vat::NUMERIC,registration.price_paid_sek::NUMERIC,0)*100)::INTEGER AS amount_minor
-    FROM public.session_registrations registration
-    JOIN public.activity_sessions session ON session.id=registration.activity_session_id
-    LEFT JOIN public.commerce_order_lines line ON line.session_registration_id=registration.id
-    LEFT JOIN public.booking_receipts receipt ON receipt.stripe_session_id=registration.stripe_session_id
-    WHERE registration.cancellation_policy_snapshot_id IS NULL AND line.id IS NULL
-      AND registration.status IN ('confirmed','checked_in','no_show','cancelled')
-  LOOP
-    v_start := ((v_row.session_date::TEXT || 'T' || COALESCE(v_row.start_time::TEXT,'00:00:00'))::TIMESTAMP AT TIME ZONE 'Europe/Stockholm');
-    v_rules := jsonb_build_object('cancel_anchor','start_at','cancel_offset_minutes',0,
-      'refund_mode','automatic','refund_percentage',100,'refund_anchor','start_at','refund_offset_minutes',0,
-      'refund_comparison','strict_before','entitlement_restore_mode','none','legacy_behavior',true,
-      'customer_locks',jsonb_build_array('checked_in'));
-    v_snapshot_id := public.create_legacy_cancellation_snapshot(
-      v_row.venue_id,'occurrence_ticket','session_registration',v_row.id,v_start,
-      v_row.user_id,v_row.customer_id,v_rules,v_sv,v_en,
-      jsonb_build_object('booking_receipt_id',v_row.receipt_id,'stripe_session_id',v_row.stripe_session_id,
-        'payment_intent_id',v_row.stripe_payment_intent_id,'amount_minor',v_row.amount_minor)
-    );
-    UPDATE public.session_registrations SET cancellation_policy_snapshot_id=v_snapshot_id WHERE id=v_row.id;
-  END LOOP;
-
-  v_rules := jsonb_build_object('cancel_anchor','start_at','cancel_offset_minutes',0,
-    'refund_mode','none','refund_percentage',0,'refund_anchor','start_at','refund_offset_minutes',0,
-    'refund_comparison','strict_before','entitlement_restore_mode','measurable_before_refund_deadline',
-    'legacy_behavior',true,'legacy_manual_refund',false,'customer_locks',jsonb_build_array('checked_in'));
-  FOR v_row IN SELECT booking.* FROM public.bookings booking
-    WHERE cancellation_policy_snapshot_id IS NULL AND status IN ('confirmed','cancelled')
-  LOOP
-    v_snapshot_id := public.create_legacy_cancellation_snapshot(
-      v_row.venue_id, 'court_booking', 'booking', v_row.id, v_row.start_time,
-      v_row.user_id, v_row.customer_id, v_rules, v_sv, v_en,
-      jsonb_build_object('stripe_session_id',v_row.stripe_session_id,'amount_minor',round(COALESCE(v_row.total_price,0)*100)),
-      jsonb_build_object('meter_type',CASE WHEN COALESCE(v_row.included_court_hours,0)>0
-        THEN 'court_hours' ELSE 'unlimited' END,
-        'entitlement_type',v_row.membership_usage_entitlement_type)
-    );
-    UPDATE public.bookings SET cancellation_policy_snapshot_id = v_snapshot_id WHERE id = v_row.id;
-  END LOOP;
-
-  v_rules := v_rules || jsonb_build_object('legacy_manual_refund',true);
-  FOR v_row IN SELECT participant.*, booking.start_time, booking.user_id AS booking_user_id
-    FROM public.booking_participants participant
-    JOIN public.bookings booking ON booking.id = participant.booking_id
-    WHERE participant.cancellation_policy_snapshot_id IS NULL
-      AND participant.payment_status IN ('paid','free','cancelled')
-  LOOP
-    v_snapshot_id := public.create_legacy_cancellation_snapshot(
-      v_row.venue_id, 'booking_participant', 'booking_participant', v_row.id, v_row.start_time,
-      v_row.user_id, v_row.customer_id, v_rules, v_sv, v_en,
-      jsonb_build_object('booking_receipt_id',v_row.booking_receipt_id,'amount_minor',v_row.price_minor)
-    );
-    UPDATE public.booking_participants SET cancellation_policy_snapshot_id = v_snapshot_id WHERE id = v_row.id;
-  END LOOP;
-END $$;
 
 CREATE OR REPLACE FUNCTION public.cancellation_subject_state(
   p_subject_type TEXT,
@@ -605,6 +656,13 @@ DECLARE
   v_allowed BOOLEAN; v_reason TEXT; v_refund_amount INTEGER := 0;
   v_refund_mode TEXT := 'none'; v_restore TEXT := 'not_applicable';
   v_revision TEXT; v_customer_user_id UUID; v_line_id UUID; v_scope_revision TEXT;
+  v_policy_mode TEXT := 'policy_v1'; v_policy_family TEXT; v_policy_key TEXT;
+  v_policy_version INTEGER; v_provenance TEXT; v_authority_key TEXT;
+  v_purchase_at TIMESTAMPTZ; v_cutover_at TIMESTAMPTZ; v_start_at TIMESTAMPTZ;
+  v_registration_close_at TIMESTAMPTZ; v_cancel_deadline_at TIMESTAMPTZ;
+  v_refund_deadline_at TIMESTAMPTZ; v_rules JSONB; v_copy_sv JSONB; v_copy_en JSONB;
+  v_payer_user_id UUID; v_payer_customer_id UUID; v_funding JSONB := '{}'::JSONB;
+  v_included_court_hours NUMERIC := 0; v_group_stripe_session TEXT;
 BEGIN
   IF p_staff_refund_choice NOT IN ('policy','full','none') THEN
     RAISE EXCEPTION 'invalid_staff_refund_choice';
@@ -620,16 +678,22 @@ BEGIN
     SELECT COALESCE(line.cancellation_policy_snapshot_id, registration.cancellation_policy_snapshot_id), registration.venue_id, registration.user_id,
       registration.customer_id, registration.status, registration.updated_at,
       order_row.id, line.line_total_inc_vat_minor, order_row.currency,
-      order_row.booking_receipt_id, order_row.stripe_payment_intent_id, line.id
+      order_row.booking_receipt_id, order_row.stripe_payment_intent_id, line.id,
+      COALESCE(order_row.checkout_frozen_at, order_row.paid_at, order_row.created_at,
+        registration.registered_at),
+      ((registration.session_date::TEXT || 'T' || COALESCE(session.start_time::TEXT,'00:00:00'))::TIMESTAMP
+        AT TIME ZONE 'Europe/Stockholm')
     INTO v_snapshot.id, v_venue_id, v_owner_user_id, v_owner_customer_id,
       v_status, v_updated_at, v_order_id, v_amount, v_currency, v_receipt_id,
-      v_payment_intent, v_line_id
+      v_payment_intent, v_line_id, v_purchase_at, v_start_at
     FROM public.session_registrations registration
     LEFT JOIN public.commerce_order_lines line ON line.session_registration_id = registration.id
       AND line.commerce_kind = 'participation'
     LEFT JOIN public.commerce_orders order_row ON order_row.id = line.commerce_order_id
+    JOIN public.activity_sessions session ON session.id = registration.activity_session_id
     WHERE registration.id = p_subject_id
     ORDER BY line.created_at DESC NULLS LAST LIMIT 1;
+    v_policy_family := 'occurrence_ticket';
     v_checked_in := v_status IN ('checked_in','no_show') OR EXISTS (
       SELECT 1 FROM public.entitlement_consumptions consumption
       WHERE consumption.registration_id = p_subject_id AND consumption.event_type = 'use'
@@ -651,15 +715,21 @@ BEGIN
       customer.auth_user_id, commitment.payer_customer_id, commitment.status,
       commitment.updated_at, order_row.id, line.line_total_inc_vat_minor,
       order_row.currency, order_row.booking_receipt_id, order_row.stripe_payment_intent_id,
-      line.id
+      line.id, COALESCE(order_row.checkout_frozen_at, order_row.paid_at,
+        order_row.created_at, commitment.created_at),
+      ((series.start_date::TEXT || 'T' || COALESCE(series.start_time::TEXT,'00:00:00'))::TIMESTAMP
+        AT TIME ZONE 'Europe/Stockholm'), series.registration_closes_at
     INTO v_snapshot.id, v_venue_id, v_owner_user_id, v_owner_customer_id,
       v_status, v_updated_at, v_order_id, v_amount, v_currency, v_receipt_id,
-      v_payment_intent, v_line_id
+      v_payment_intent, v_line_id, v_purchase_at, v_start_at,
+      v_registration_close_at
     FROM public.series_commitments commitment
     LEFT JOIN public.customers customer ON customer.id = commitment.payer_customer_id
     LEFT JOIN public.commerce_order_lines line ON line.id = commitment.commerce_order_line_id
     LEFT JOIN public.commerce_orders order_row ON order_row.id = commitment.commerce_order_id
+    JOIN public.activity_series series ON series.id = commitment.activity_series_id
     WHERE commitment.id = p_subject_id;
+    v_policy_family := 'managed_course';
     SELECT EXISTS (SELECT 1 FROM public.session_registrations registration
       WHERE registration.series_commitment_id = p_subject_id
         AND registration.status IN ('checked_in','no_show')) INTO v_checked_in;
@@ -668,10 +738,15 @@ BEGIN
       entry.payer_customer_id, entry.status, entry.updated_at, order_row.id,
       line.line_total_inc_vat_minor, order_row.currency, order_row.booking_receipt_id,
       order_row.stripe_payment_intent_id, line.id, season.fixtures_published_at,
-      (p_now >= ((series.start_date::TEXT || 'T' || COALESCE(series.start_time::TEXT,'00:00:00'))::TIMESTAMP AT TIME ZONE 'Europe/Stockholm'))
+      (p_now >= ((series.start_date::TEXT || 'T' || COALESCE(series.start_time::TEXT,'00:00:00'))::TIMESTAMP AT TIME ZONE 'Europe/Stockholm')),
+      COALESCE(order_row.checkout_frozen_at, order_row.paid_at,
+        order_row.created_at, entry.created_at),
+      ((series.start_date::TEXT || 'T' || COALESCE(series.start_time::TEXT,'00:00:00'))::TIMESTAMP
+        AT TIME ZONE 'Europe/Stockholm'), series.registration_closes_at
     INTO v_snapshot.id, v_venue_id, v_owner_user_id, v_owner_customer_id,
       v_status, v_updated_at, v_order_id, v_amount, v_currency, v_receipt_id,
       v_payment_intent, v_line_id, v_fixtures_published, v_series_started
+      , v_purchase_at, v_start_at, v_registration_close_at
     FROM public.league_team_entries entry
     JOIN public.league_seasons season ON season.id = entry.league_season_id
     JOIN public.activity_series series ON series.id = season.activity_series_id
@@ -679,22 +754,31 @@ BEGIN
     LEFT JOIN public.commerce_order_lines line ON line.id = entry.commerce_order_line_id
     LEFT JOIN public.commerce_orders order_row ON order_row.id = entry.commerce_order_id
     WHERE entry.id = p_subject_id;
+    v_policy_family := 'league_team';
   ELSIF p_subject_type = 'court_booking' THEN
     SELECT booking.cancellation_policy_snapshot_id, booking.venue_id,
       COALESCE(booking.user_id, booking.booked_by), booking.customer_id,
       booking.status::TEXT, booking.updated_at, booking.currency,
       receipt.id, receipt.stripe_payment_intent_id,
-      round(COALESCE(receipt.total_inc_vat_sek, receipt.total_inc_vat::NUMERIC, booking.total_price, 0) * 100)::INTEGER
+      round(COALESCE(receipt.total_inc_vat_sek, receipt.total_inc_vat::NUMERIC, booking.total_price, 0) * 100)::INTEGER,
+      COALESCE(booking.cancellation_policy_legacy_purchase_at,booking.created_at),
+      booking.start_time, booking.included_court_hours,
+      booking.stripe_session_id
     INTO v_snapshot.id, v_venue_id, v_owner_user_id, v_owner_customer_id,
       v_status, v_updated_at, v_currency, v_receipt_id, v_payment_intent, v_amount
+      , v_purchase_at, v_start_at, v_included_court_hours, v_group_stripe_session
     FROM public.bookings booking
     LEFT JOIN public.booking_receipts receipt ON receipt.stripe_session_id = booking.stripe_session_id
     WHERE booking.id = p_subject_id ORDER BY receipt.created_at DESC NULLS LAST LIMIT 1;
+    v_policy_family := 'court_booking';
     SELECT string_agg(concat_ws(':', booking.id::TEXT, booking.status::TEXT,
       COALESCE(booking.updated_at::TEXT,'')), '|' ORDER BY booking.id)
     INTO v_scope_revision
     FROM public.bookings booking
-    WHERE booking.cancellation_policy_snapshot_id = v_snapshot.id;
+    WHERE (v_snapshot.id IS NOT NULL AND booking.cancellation_policy_snapshot_id = v_snapshot.id)
+      OR (v_snapshot.id IS NULL AND booking.cancellation_policy_snapshot_id IS NULL
+        AND ((v_group_stripe_session IS NOT NULL AND booking.stripe_session_id = v_group_stripe_session)
+          OR (v_group_stripe_session IS NULL AND booking.id = p_subject_id)));
     v_checked_in := EXISTS (
       SELECT 1 FROM public.venue_checkins checkin
       JOIN public.access_entitlements entitlement ON entitlement.id = checkin.entitlement_id
@@ -707,19 +791,21 @@ BEGIN
       participant.user_id, participant.customer_id, participant.payment_status,
       participant.updated_at, participant.currency, participant.booking_receipt_id,
       receipt.stripe_payment_intent_id, participant.price_minor, participant.checked_in_at IS NOT NULL
+      , participant.created_at, booking.start_time
     INTO v_snapshot.id, v_venue_id, v_owner_user_id, v_owner_customer_id,
       v_status, v_updated_at, v_currency, v_receipt_id, v_payment_intent,
       v_amount, v_checked_in
+      , v_purchase_at, v_start_at
     FROM public.booking_participants participant
+    JOIN public.bookings booking ON booking.id = participant.booking_id
     LEFT JOIN public.booking_receipts receipt ON receipt.id = participant.booking_receipt_id
     WHERE participant.id = p_subject_id;
+    v_policy_family := 'booking_participant';
   ELSE
     RAISE EXCEPTION 'unsupported_cancellation_subject';
   END IF;
 
   IF v_venue_id IS NULL THEN RAISE EXCEPTION 'cancellation_subject_not_found'; END IF;
-  IF v_snapshot.id IS NULL THEN RAISE EXCEPTION 'cancellation_policy_snapshot_missing'; END IF;
-  SELECT * INTO v_snapshot FROM public.cancellation_policy_snapshots WHERE id = v_snapshot.id;
   IF v_owner_user_id IS NULL AND v_owner_customer_id IS NOT NULL THEN
     SELECT auth_user_id INTO v_customer_user_id FROM public.customers WHERE id = v_owner_customer_id;
     v_owner_user_id := v_customer_user_id;
@@ -728,9 +814,95 @@ BEGIN
     RAISE EXCEPTION 'cancellation_owner_mismatch';
   END IF;
 
+  IF v_snapshot.id IS NOT NULL THEN
+    SELECT * INTO v_snapshot FROM public.cancellation_policy_snapshots WHERE id = v_snapshot.id;
+    SELECT cutover.enabled_at INTO v_cutover_at
+    FROM public.cancellation_policy_cutovers cutover
+    WHERE cutover.id = v_snapshot.cutover_id
+      AND cutover.venue_id = v_snapshot.venue_id
+      AND cutover.authority_key = v_snapshot.authority_key
+      AND cutover.policy_family = v_snapshot.policy_family;
+    IF v_cutover_at IS NULL OR v_snapshot.terms_accepted_at < v_cutover_at THEN
+      RAISE EXCEPTION 'cancellation_policy_snapshot_cutover_mismatch';
+    END IF;
+    v_policy_mode := 'policy_v1';
+    v_policy_family := v_snapshot.policy_family;
+    v_policy_key := v_snapshot.policy_key;
+    v_policy_version := v_snapshot.policy_version;
+    v_provenance := v_snapshot.provenance;
+    v_authority_key := v_snapshot.authority_key;
+    v_cancel_deadline_at := v_snapshot.cancel_deadline_at;
+    v_refund_deadline_at := v_snapshot.refund_deadline_at;
+    v_rules := v_snapshot.rules;
+    v_copy_sv := v_snapshot.copy_sv;
+    v_copy_en := v_snapshot.copy_en;
+    v_payer_user_id := v_snapshot.payer_user_id;
+    v_payer_customer_id := v_snapshot.payer_customer_id;
+    v_funding := v_snapshot.funding_provenance;
+  ELSE
+    v_authority_key := v_policy_family;
+    SELECT cutover.enabled_at INTO v_cutover_at
+    FROM public.cancellation_policy_cutovers cutover
+    WHERE cutover.venue_id = v_venue_id
+      AND cutover.authority_key = v_authority_key
+      AND cutover.policy_family = v_policy_family;
+    IF v_cutover_at IS NULL THEN
+      RAISE EXCEPTION 'cancellation_policy_family_not_enabled:%', v_authority_key;
+    END IF;
+    IF v_purchase_at IS NULL OR v_purchase_at >= v_cutover_at THEN
+      RAISE EXCEPTION 'cancellation_policy_snapshot_required_after_cutover:%', v_authority_key;
+    END IF;
+
+    -- This is an operational dispatch marker, never a contractual snapshot.
+    -- It preserves the code behavior that existed before Policy V1 and says
+    -- explicitly that historical policy details were not captured.
+    v_policy_mode := 'legacy';
+    v_policy_key := 'legacy-preserved';
+    v_policy_version := NULL;
+    v_provenance := 'pre_cutover_runtime';
+    v_cancel_deadline_at := CASE
+      WHEN v_policy_family IN ('court_booking','booking_participant') THEN NULL
+      WHEN v_policy_family = 'league_team' THEN v_registration_close_at
+      ELSE v_start_at
+    END;
+    v_refund_deadline_at := CASE
+      WHEN v_policy_family IN ('occurrence_ticket','managed_course','league_team')
+        THEN v_cancel_deadline_at
+      ELSE NULL
+    END;
+    v_rules := jsonb_build_object(
+      'contract_mode','legacy','policy_details','unavailable',
+      'refund_mode',CASE
+        WHEN v_policy_family IN ('occurrence_ticket','managed_course','league_team') THEN 'automatic'
+        ELSE 'none' END,
+      'legacy_manual_refund',v_policy_family = 'booking_participant',
+      'entitlement_restore_mode',CASE WHEN v_policy_family = 'court_booking'
+        THEN 'legacy_measurable' ELSE 'none' END
+    );
+    v_copy_sv := jsonb_build_object(
+      'title','Legacy policy',
+      'summary','Köpt före Policy V1. Policyuppgifter saknas; endast den bevarade legacy-konsekvensen visas.',
+      'late','Inga nya Policy V1-villkor tillämpas retroaktivt.',
+      'boundary','Kontakta Pickla om de historiska villkoren behöver granskas.'
+    );
+    v_copy_en := jsonb_build_object(
+      'title','Legacy policy',
+      'summary','Purchased before Policy V1. Policy details are unavailable; only the preserved legacy consequence is shown.',
+      'late','No new Policy V1 terms are applied retroactively.',
+      'boundary','Contact Pickla if the historical terms need review.'
+    );
+    v_payer_user_id := v_owner_user_id;
+    v_payer_customer_id := v_owner_customer_id;
+    IF v_policy_family = 'court_booking' THEN
+      v_funding := jsonb_build_object('meter_type',CASE
+        WHEN COALESCE(v_included_court_hours,0) > 0 THEN 'court_hours' ELSE 'unlimited' END);
+    END IF;
+  END IF;
+
   v_revision := encode(extensions.digest(concat_ws('|', p_subject_type, p_subject_id::TEXT,
-    COALESCE(v_status,''), COALESCE(v_updated_at::TEXT,''), v_snapshot.id::TEXT,
-    COALESCE(v_snapshot.cancel_deadline_at::TEXT,''), COALESCE(v_snapshot.refund_deadline_at::TEXT,''),
+    COALESCE(v_status,''), COALESCE(v_updated_at::TEXT,''), v_policy_mode,
+    COALESCE(v_snapshot.id::TEXT,'legacy:' || v_cutover_at::TEXT),
+    COALESCE(v_cancel_deadline_at::TEXT,''), COALESCE(v_refund_deadline_at::TEXT,''),
     COALESCE(v_fixtures_published::TEXT,''), v_checked_in::TEXT, COALESCE(v_scope_revision,''),
     p_staff_override::TEXT, p_staff_refund_choice, p_staff_restore_choice), 'sha256'::TEXT), 'hex');
 
@@ -738,33 +910,33 @@ BEGIN
   v_reason := 'allowed';
   IF v_status IN ('cancelled','withdrawn') THEN
     v_allowed := false; v_reason := 'already_cancelled';
-  ELSIF NOT p_staff_override AND v_checked_in THEN
+  ELSIF NOT p_staff_override AND v_policy_mode = 'policy_v1' AND v_checked_in THEN
     v_allowed := false; v_reason := 'checked_in_locked';
   ELSIF NOT p_staff_override AND p_subject_type = 'league_team_entry'
     AND (v_fixtures_published IS NOT NULL OR v_series_started) THEN
     v_allowed := false; v_reason := CASE WHEN v_fixtures_published IS NOT NULL THEN 'fixtures_published' ELSE 'league_started' END;
-  ELSIF NOT p_staff_override AND p_now >= v_snapshot.cancel_deadline_at THEN
-    v_allowed := false; v_reason := CASE WHEN v_snapshot.policy_family = 'managed_course' THEN 'course_started' ELSE 'cancellation_closed' END;
+  ELSIF NOT p_staff_override AND v_cancel_deadline_at IS NOT NULL
+    AND p_now >= v_cancel_deadline_at THEN
+    v_allowed := false; v_reason := CASE WHEN v_policy_family = 'managed_course' THEN 'course_started' ELSE 'cancellation_closed' END;
   END IF;
 
   IF v_allowed AND v_status NOT IN ('cancelled','withdrawn')
-    AND v_snapshot.rules->>'refund_mode' = 'automatic'
-    AND v_snapshot.refund_deadline_at IS NOT NULL
-    AND p_now < v_snapshot.refund_deadline_at
+    AND v_rules->>'refund_mode' = 'automatic'
+    AND v_refund_deadline_at IS NOT NULL
+    AND p_now < v_refund_deadline_at
     AND v_amount > 0 THEN
     v_refund_mode := 'automatic_full'; v_refund_amount := v_amount;
-  ELSIF v_snapshot.rules->>'legacy_manual_refund' = 'true' AND v_amount > 0
-    AND p_now < COALESCE(v_snapshot.refund_deadline_at, v_snapshot.cancel_deadline_at) THEN
+  ELSIF v_policy_mode = 'legacy' AND v_policy_family = 'booking_participant'
+    AND v_amount > 0 THEN
     v_refund_mode := 'manual_legacy';
   END IF;
-  IF v_allowed AND p_now < COALESCE(
-      v_snapshot.refund_deadline_at,
-      CASE WHEN v_snapshot.rules->>'legacy_behavior' = 'true' THEN v_snapshot.cancel_deadline_at END,
-      '-infinity'::TIMESTAMPTZ
-    )
-    AND v_snapshot.rules->>'entitlement_restore_mode' = 'measurable_before_refund_deadline' THEN
+  IF v_allowed AND (
+      (v_policy_mode = 'legacy' AND v_policy_family = 'court_booking')
+      OR (v_policy_mode = 'policy_v1' AND p_now < COALESCE(v_refund_deadline_at,'-infinity'::TIMESTAMPTZ)
+        AND v_rules->>'entitlement_restore_mode' = 'measurable_before_refund_deadline')
+    ) THEN
     v_restore := CASE
-      WHEN v_snapshot.funding_provenance->>'meter_type' IN ('court_hours','occurrences') THEN 'measurable'
+      WHEN v_funding->>'meter_type' IN ('court_hours','occurrences') THEN 'measurable'
       ELSE 'not_applicable'
     END;
   ELSE v_restore := 'none'; END IF;
@@ -777,7 +949,7 @@ BEGIN
     END IF;
     IF p_staff_restore_choice = 'restore' THEN
       v_restore := CASE
-        WHEN v_snapshot.funding_provenance->>'meter_type' IN ('court_hours','occurrences') THEN 'measurable'
+        WHEN v_funding->>'meter_type' IN ('court_hours','occurrences') THEN 'measurable'
         ELSE 'not_applicable'
       END;
     ELSIF p_staff_restore_choice = 'none' THEN
@@ -786,7 +958,8 @@ BEGIN
     v_reason := 'operator_override_cutoff';
   ELSIF v_allowed AND v_status NOT IN ('cancelled','withdrawn') THEN
     v_reason := CASE
-      WHEN v_snapshot.rules->>'refund_mode' = 'none' THEN 'refund_not_due_non_refundable'
+      WHEN v_policy_mode = 'legacy' THEN 'legacy_cancellation_allowed'
+      WHEN v_rules->>'refund_mode' = 'none' THEN 'refund_not_due_non_refundable'
       WHEN v_refund_mode = 'automatic_full' THEN 'customer_cancelled_before_refund_cutoff'
       ELSE 'customer_cancelled_after_refund_cutoff'
     END;
@@ -794,16 +967,19 @@ BEGIN
 
   RETURN jsonb_build_object(
     'subject_type', p_subject_type, 'subject_id', p_subject_id,
-    'venue_id', v_venue_id, 'snapshot_id', v_snapshot.id,
-    'policy_family', v_snapshot.policy_family, 'policy_key', v_snapshot.policy_key,
-    'policy_version', v_snapshot.policy_version, 'provenance', v_snapshot.provenance,
-    'copy_sv', v_snapshot.copy_sv, 'copy_en', v_snapshot.copy_en,
+    'venue_id', v_venue_id, 'policy_mode', v_policy_mode,
+    'snapshot_id', v_snapshot.id, 'authority_key', v_authority_key,
+    'policy_family', v_policy_family, 'policy_key', v_policy_key,
+    'policy_version', v_policy_version, 'provenance', v_provenance,
+    'legacy_policy_details_available', v_policy_mode <> 'legacy',
+    'purchase_at', v_purchase_at, 'cutover_at', v_cutover_at,
+    'copy_sv', v_copy_sv, 'copy_en', v_copy_en,
     'evaluated_at', p_now, 'state_revision', v_revision, 'decision_revision', v_revision,
     'allowed', v_allowed, 'can_cancel', v_allowed, 'reason_code', v_reason,
     'already_cancelled', v_status IN ('cancelled','withdrawn'),
     'checked_in', v_checked_in, 'checkin_preserved', p_staff_override AND v_checked_in,
-    'cancel_deadline_at', v_snapshot.cancel_deadline_at,
-    'refund_deadline_at', v_snapshot.refund_deadline_at,
+    'cancel_deadline_at', v_cancel_deadline_at,
+    'refund_deadline_at', v_refund_deadline_at,
     'refund_mode', v_refund_mode, 'refund_eligible', v_refund_mode = 'automatic_full',
     'refund_amount_minor', v_refund_amount,
     'currency', COALESCE(v_currency,'SEK'), 'entitlement_restore_mode', v_restore,
@@ -811,12 +987,12 @@ BEGIN
     'capacity_effect', CASE WHEN v_allowed THEN 'release_immediately' ELSE 'none' END,
     'customer_message_key', v_reason,
     'customer_message_params', jsonb_build_object('refund_amount_minor',v_refund_amount,
-      'currency',COALESCE(v_currency,'SEK'),'refund_deadline_at',v_snapshot.refund_deadline_at,
-      'cancel_deadline_at',v_snapshot.cancel_deadline_at),
+      'currency',COALESCE(v_currency,'SEK'),'refund_deadline_at',v_refund_deadline_at,
+      'cancel_deadline_at',v_cancel_deadline_at),
     'commerce_order_id', v_order_id, 'commerce_order_line_id', v_line_id,
     'booking_receipt_id', v_receipt_id, 'stripe_payment_intent_id', v_payment_intent,
-    'payer_user_id', v_snapshot.payer_user_id, 'payer_customer_id', v_snapshot.payer_customer_id,
-    'rules', v_snapshot.rules
+    'payer_user_id', v_payer_user_id, 'payer_customer_id', v_payer_customer_id,
+    'rules', v_rules
   );
 END;
 $$;
@@ -841,7 +1017,8 @@ DECLARE
   v_commitment public.series_commitments%ROWTYPE;
   v_line public.commerce_order_lines%ROWTYPE; v_booking public.bookings%ROWTYPE;
   v_consumption RECORD;
-  v_refund_amount INTEGER; v_vat INTEGER; v_group_snapshot UUID; v_restored NUMERIC := 0;
+  v_refund_amount INTEGER; v_vat INTEGER; v_group_snapshot UUID; v_group_stripe_session TEXT;
+  v_restored NUMERIC := 0;
   v_refund_id UUID := gen_random_uuid();
   v_request TEXT := NULLIF(btrim(COALESCE(p_request_id,'')), '');
   v_reason TEXT := NULLIF(btrim(COALESCE(p_staff_reason,'')), '');
@@ -870,10 +1047,14 @@ BEGIN
   ELSIF p_subject_type = 'league_team_entry' THEN
     PERFORM 1 FROM public.league_team_entries WHERE id = p_subject_id FOR UPDATE;
   ELSIF p_subject_type = 'court_booking' THEN
-    SELECT cancellation_policy_snapshot_id INTO v_group_snapshot
+    SELECT cancellation_policy_snapshot_id, stripe_session_id
+    INTO v_group_snapshot, v_group_stripe_session
     FROM public.bookings WHERE id = p_subject_id;
     PERFORM 1 FROM public.bookings
-    WHERE cancellation_policy_snapshot_id = v_group_snapshot
+    WHERE (v_group_snapshot IS NOT NULL AND cancellation_policy_snapshot_id = v_group_snapshot)
+      OR (v_group_snapshot IS NULL AND cancellation_policy_snapshot_id IS NULL
+        AND ((v_group_stripe_session IS NOT NULL AND stripe_session_id = v_group_stripe_session)
+          OR (v_group_stripe_session IS NULL AND id = p_subject_id)))
     ORDER BY id FOR UPDATE;
   ELSIF p_subject_type = 'booking_participant' THEN
     PERFORM 1 FROM public.booking_participants WHERE id = p_subject_id FOR UPDATE;
@@ -904,12 +1085,13 @@ BEGIN
   END IF;
 
   INSERT INTO public.cancellation_decisions (
-    venue_id, snapshot_id, subject_type, subject_id, request_id, actor_user_id,
+    venue_id, policy_mode, snapshot_id, subject_type, subject_id, request_id, actor_user_id,
     actor_mode, staff_reason, evaluated_at, state_revision, allowed, reason_code,
     refund_mode, refund_amount_minor, currency, entitlement_restore_mode,
     checkin_preserved, decision
   ) VALUES (
-    (v_preview->>'venue_id')::UUID, (v_preview->>'snapshot_id')::UUID,
+    (v_preview->>'venue_id')::UUID, v_preview->>'policy_mode',
+    NULLIF(v_preview->>'snapshot_id','')::UUID,
     p_subject_type, p_subject_id, v_request, p_actor_user_id,
     CASE WHEN p_staff_override THEN 'staff_override' ELSE 'customer' END,
     v_reason, (v_preview->>'evaluated_at')::TIMESTAMPTZ,
@@ -962,12 +1144,18 @@ BEGIN
   ELSIF p_subject_type = 'court_booking' THEN
     SELECT * INTO v_booking FROM public.bookings WHERE id = p_subject_id;
     v_group_snapshot := v_booking.cancellation_policy_snapshot_id;
+    v_group_stripe_session := v_booking.stripe_session_id;
     IF v_preview->>'entitlement_restore_mode' = 'measurable' THEN
       WITH restoration AS (
         SELECT user_id, venue_id, membership_usage_period_start AS period_start,
           sum(included_court_hours) AS restore_value
         FROM public.bookings
-        WHERE cancellation_policy_snapshot_id = v_group_snapshot AND status <> 'cancelled'
+        WHERE status <> 'cancelled' AND (
+          (v_group_snapshot IS NOT NULL AND cancellation_policy_snapshot_id = v_group_snapshot)
+          OR (v_group_snapshot IS NULL AND cancellation_policy_snapshot_id IS NULL
+            AND ((v_group_stripe_session IS NOT NULL AND stripe_session_id = v_group_stripe_session)
+              OR (v_group_stripe_session IS NULL AND id = p_subject_id)))
+        )
           AND included_court_hours > 0 AND membership_usage_period_start IS NOT NULL
         GROUP BY user_id, venue_id, membership_usage_period_start
       )
@@ -978,11 +1166,21 @@ BEGIN
         AND usage.entitlement_type = 'court_hours_per_week'
         AND usage.period_start = restoration.period_start;
       SELECT COALESCE(sum(included_court_hours),0) INTO v_restored FROM public.bookings
-        WHERE cancellation_policy_snapshot_id = v_group_snapshot AND status <> 'cancelled';
+        WHERE status <> 'cancelled' AND (
+          (v_group_snapshot IS NOT NULL AND cancellation_policy_snapshot_id = v_group_snapshot)
+          OR (v_group_snapshot IS NULL AND cancellation_policy_snapshot_id IS NULL
+            AND ((v_group_stripe_session IS NOT NULL AND stripe_session_id = v_group_stripe_session)
+              OR (v_group_stripe_session IS NULL AND id = p_subject_id)))
+        );
     END IF;
     UPDATE public.bookings SET status = 'cancelled', updated_at = now(),
       notes = concat_ws(E'\n',NULLIF(notes,''),'cancellation_decision:' || v_decision.id::TEXT)
-      WHERE cancellation_policy_snapshot_id = v_group_snapshot AND status <> 'cancelled';
+      WHERE status <> 'cancelled' AND (
+        (v_group_snapshot IS NOT NULL AND cancellation_policy_snapshot_id = v_group_snapshot)
+        OR (v_group_snapshot IS NULL AND cancellation_policy_snapshot_id IS NULL
+          AND ((v_group_stripe_session IS NOT NULL AND stripe_session_id = v_group_stripe_session)
+            OR (v_group_stripe_session IS NULL AND id = p_subject_id)))
+      );
   ELSIF p_subject_type = 'booking_participant' THEN
     PERFORM public.cancel_booking_participant_capacity(p_subject_id,p_actor_user_id,
       jsonb_build_object('cancellation_decision_id',v_decision.id,'cancel_request_id',v_request,
@@ -1173,11 +1371,15 @@ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_binding RECORD;
 BEGIN
   SELECT policy.policy_key, version.version, version.preset_key, version.rules,
-    version.copy_sv, version.copy_en, binding.subject_type
+    version.copy_sv, version.copy_en, binding.subject_type, cutover.authority_key,
+    cutover.enabled_at
   INTO v_binding
   FROM public.cancellation_policy_bindings binding
   JOIN public.cancellation_policy_versions version ON version.id=binding.policy_version_id
   JOIN public.cancellation_policies policy ON policy.id=version.policy_id
+  JOIN public.cancellation_policy_cutovers cutover ON cutover.venue_id=binding.venue_id
+    AND cutover.policy_family=binding.policy_family
+    AND cutover.preset_key=version.preset_key
   WHERE binding.venue_id=p_venue_id AND binding.policy_family=p_policy_family
     AND binding.is_active AND version.lifecycle_status='published'
     AND ((binding.subject_type='event' AND binding.subject_id=p_event_id)
@@ -1189,8 +1391,168 @@ BEGIN
   IF v_binding.policy_key IS NULL THEN RETURN NULL; END IF;
   RETURN jsonb_build_object('policy_key',v_binding.policy_key,'version',v_binding.version,
     'preset_key',v_binding.preset_key,'rules',v_binding.rules,'copy_sv',v_binding.copy_sv,
-    'copy_en',v_binding.copy_en,'source',v_binding.subject_type);
+    'copy_en',v_binding.copy_en,'source',v_binding.subject_type,
+    'authority_key',v_binding.authority_key,'enabled_at',v_binding.enabled_at);
 END;
+$$;
+
+-- Permanent read-only rollout evidence. This reports the populations selected
+-- by the rejected bootstrap without writing a snapshot or touching a purchase.
+CREATE OR REPLACE FUNCTION public.cancellation_policy_rollout_preflight(
+  p_venue_id UUID DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  WITH populations AS (
+    SELECT 'commerce_participation'::TEXT AS population, count(*)::BIGINT AS legacy_rows
+    FROM public.commerce_order_lines line
+    JOIN public.commerce_orders order_row ON order_row.id=line.commerce_order_id
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=order_row.venue_id
+      AND cutover.authority_key=CASE
+        WHEN line.league_team_entry_id IS NOT NULL THEN 'league_team'
+        WHEN line.activity_series_id IS NOT NULL THEN 'managed_course'
+        ELSE 'occurrence_ticket' END
+    WHERE line.commerce_kind='participation'
+      AND line.cancellation_policy_snapshot_id IS NULL
+      AND order_row.status IN ('paid','attention','cancelled')
+      AND COALESCE(order_row.checkout_frozen_at,order_row.paid_at,order_row.created_at) < cutover.enabled_at
+      AND (p_venue_id IS NULL OR order_row.venue_id=p_venue_id)
+    UNION ALL
+    SELECT 'standalone_registration', count(*)::BIGINT
+    FROM public.session_registrations registration
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=registration.venue_id AND cutover.authority_key='occurrence_ticket'
+    LEFT JOIN public.commerce_order_lines line ON line.session_registration_id=registration.id
+    WHERE registration.cancellation_policy_snapshot_id IS NULL AND line.id IS NULL
+      AND registration.status IN ('confirmed','checked_in','no_show','cancelled')
+      AND registration.registered_at < cutover.enabled_at
+      AND (p_venue_id IS NULL OR registration.venue_id=p_venue_id)
+    UNION ALL
+    SELECT 'court_booking', count(*)::BIGINT
+    FROM public.bookings booking
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=booking.venue_id AND cutover.authority_key='court_booking'
+    WHERE booking.cancellation_policy_snapshot_id IS NULL
+      AND booking.status IN ('confirmed','cancelled')
+      AND COALESCE(booking.cancellation_policy_legacy_purchase_at,booking.created_at) < cutover.enabled_at
+      AND (p_venue_id IS NULL OR booking.venue_id=p_venue_id)
+    UNION ALL
+    SELECT 'booking_participant', count(*)::BIGINT
+    FROM public.booking_participants participant
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=participant.venue_id AND cutover.authority_key='booking_participant'
+    WHERE participant.cancellation_policy_snapshot_id IS NULL
+      AND participant.payment_status IN ('paid','free','cancelled')
+      AND participant.created_at < cutover.enabled_at
+      AND (p_venue_id IS NULL OR participant.venue_id=p_venue_id)
+  ), historical_links AS (
+    SELECT 'commerce_order_lines'::TEXT AS table_name, line.id AS row_id,
+      line.cancellation_policy_snapshot_id AS snapshot_id
+    FROM public.commerce_order_lines line
+    JOIN public.commerce_orders order_row ON order_row.id=line.commerce_order_id
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=order_row.venue_id
+      AND cutover.authority_key=CASE
+        WHEN line.league_team_entry_id IS NOT NULL THEN 'league_team'
+        WHEN line.activity_series_id IS NOT NULL THEN 'managed_course'
+        ELSE 'occurrence_ticket' END
+    WHERE line.commerce_kind='participation'
+      AND line.cancellation_policy_snapshot_id IS NOT NULL
+      AND COALESCE(order_row.checkout_frozen_at,order_row.paid_at,order_row.created_at) < cutover.enabled_at
+      AND (p_venue_id IS NULL OR order_row.venue_id=p_venue_id)
+    UNION ALL
+    SELECT 'session_registrations',registration.id,registration.cancellation_policy_snapshot_id
+    FROM public.session_registrations registration
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=registration.venue_id AND cutover.authority_key='occurrence_ticket'
+    WHERE registration.cancellation_policy_snapshot_id IS NOT NULL
+      AND registration.registered_at < cutover.enabled_at
+      AND (p_venue_id IS NULL OR registration.venue_id=p_venue_id)
+    UNION ALL
+    SELECT 'bookings',booking.id,booking.cancellation_policy_snapshot_id
+    FROM public.bookings booking
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=booking.venue_id AND cutover.authority_key='court_booking'
+    WHERE booking.cancellation_policy_snapshot_id IS NOT NULL
+      AND COALESCE(booking.cancellation_policy_legacy_purchase_at,booking.created_at) < cutover.enabled_at
+      AND (p_venue_id IS NULL OR booking.venue_id=p_venue_id)
+    UNION ALL
+    SELECT 'booking_participants',participant.id,participant.cancellation_policy_snapshot_id
+    FROM public.booking_participants participant
+    JOIN public.cancellation_policy_cutovers cutover
+      ON cutover.venue_id=participant.venue_id AND cutover.authority_key='booking_participant'
+    WHERE participant.cancellation_policy_snapshot_id IS NOT NULL
+      AND participant.created_at < cutover.enabled_at
+      AND (p_venue_id IS NULL OR participant.venue_id=p_venue_id)
+  ), historical_link_totals AS (
+    SELECT count(*)::BIGINT AS linked_rows,
+      count(DISTINCT snapshot_id)::BIGINT AS linked_snapshots
+    FROM historical_links
+  ), missing_new AS (
+    SELECT count(*)::BIGINT AS missing_count FROM (
+      SELECT line.id
+      FROM public.commerce_order_lines line
+      JOIN public.commerce_orders order_row ON order_row.id=line.commerce_order_id
+      JOIN public.cancellation_policy_cutovers cutover
+        ON cutover.venue_id=order_row.venue_id
+        AND cutover.authority_key=CASE
+          WHEN line.league_team_entry_id IS NOT NULL THEN 'league_team'
+          WHEN line.activity_series_id IS NOT NULL THEN 'managed_course'
+          ELSE 'occurrence_ticket' END
+      WHERE line.commerce_kind='participation' AND line.cancellation_policy_snapshot_id IS NULL
+        AND order_row.status IN ('checkout_pending','paid','attention')
+        AND COALESCE(order_row.checkout_frozen_at,order_row.paid_at,order_row.created_at) >= cutover.enabled_at
+        AND (p_venue_id IS NULL OR order_row.venue_id=p_venue_id)
+      UNION ALL
+      SELECT booking.id FROM public.bookings booking
+      JOIN public.cancellation_policy_cutovers cutover
+        ON cutover.venue_id=booking.venue_id AND cutover.authority_key='court_booking'
+      WHERE booking.cancellation_policy_snapshot_id IS NULL AND booking.status='confirmed'
+        AND COALESCE(booking.cancellation_policy_legacy_purchase_at,booking.created_at) >= cutover.enabled_at
+        AND (p_venue_id IS NULL OR booking.venue_id=p_venue_id)
+      UNION ALL
+      SELECT participant.id FROM public.booking_participants participant
+      JOIN public.cancellation_policy_cutovers cutover
+        ON cutover.venue_id=participant.venue_id AND cutover.authority_key='booking_participant'
+      WHERE participant.cancellation_policy_snapshot_id IS NULL
+        AND participant.payment_status IN ('paid','free')
+        AND participant.created_at >= cutover.enabled_at
+        AND (p_venue_id IS NULL OR participant.venue_id=p_venue_id)
+    ) missing
+  ), config AS (
+    SELECT jsonb_build_object(
+      'policies', (SELECT count(*) FROM public.cancellation_policies policy
+        WHERE p_venue_id IS NULL OR policy.venue_id=p_venue_id),
+      'versions', (SELECT count(*) FROM public.cancellation_policy_versions version
+        JOIN public.cancellation_policies policy ON policy.id=version.policy_id
+        WHERE p_venue_id IS NULL OR policy.venue_id=p_venue_id),
+      'bindings', (SELECT count(*) FROM public.cancellation_policy_bindings binding
+        WHERE p_venue_id IS NULL OR binding.venue_id=p_venue_id),
+      'cutovers', (SELECT count(*) FROM public.cancellation_policy_cutovers cutover
+        WHERE p_venue_id IS NULL OR cutover.venue_id=p_venue_id)
+    ) AS counts
+  )
+  SELECT jsonb_build_object(
+    'historical_business_rows_mutated',(SELECT linked_rows FROM historical_link_totals),
+    'historical_snapshots_created',(SELECT linked_snapshots FROM historical_link_totals),
+    'historical_fk_links_changed',(SELECT linked_rows FROM historical_link_totals),
+    'ambiguous_legacy_rows',0,
+    'legacy_policy_details_unavailable',(SELECT COALESCE(sum(legacy_rows),0) FROM populations),
+    'legacy_population',(
+      SELECT COALESCE(jsonb_object_agg(population,legacy_rows),'{}'::JSONB) FROM populations
+    ),
+    'post_cutover_missing_snapshot',(SELECT missing_count FROM missing_new),
+    'new_policy_config_rows',(SELECT counts FROM config),
+    'enabled_authorities',(
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'venue_id',cutover.venue_id,'authority_key',cutover.authority_key,
+        'policy_family',cutover.policy_family,'preset_key',cutover.preset_key,
+        'schema_version',cutover.schema_version,'enabled_at',cutover.enabled_at
+      ) ORDER BY cutover.venue_id,cutover.authority_key),'[]'::JSONB)
+      FROM public.cancellation_policy_cutovers cutover
+      WHERE p_venue_id IS NULL OR cutover.venue_id=p_venue_id
+    )
+  );
 $$;
 
 -- Admin selection stays deliberately preset-only in V1. Rebinding never
@@ -1264,6 +1626,7 @@ $$;
 ALTER TABLE public.cancellation_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cancellation_policy_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cancellation_policy_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cancellation_policy_cutovers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cancellation_policy_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cancellation_decisions ENABLE ROW LEVEL SECURITY;
 
@@ -1283,6 +1646,11 @@ CREATE POLICY cancellation_bindings_staff_read ON public.cancellation_policy_bin
     public.is_super_admin() OR EXISTS (SELECT 1 FROM public.venue_staff staff
       WHERE staff.user_id=auth.uid() AND staff.venue_id=cancellation_policy_bindings.venue_id AND staff.is_active)
   );
+CREATE POLICY cancellation_cutovers_staff_read ON public.cancellation_policy_cutovers
+  FOR SELECT TO authenticated USING (
+    public.is_super_admin() OR EXISTS (SELECT 1 FROM public.venue_staff staff
+      WHERE staff.user_id=auth.uid() AND staff.venue_id=cancellation_policy_cutovers.venue_id AND staff.is_active)
+  );
 CREATE POLICY cancellation_snapshots_staff_read ON public.cancellation_policy_snapshots
   FOR SELECT TO authenticated USING (
     public.is_super_admin() OR EXISTS (SELECT 1 FROM public.venue_staff staff
@@ -1295,28 +1663,31 @@ CREATE POLICY cancellation_decisions_staff_read ON public.cancellation_decisions
   );
 
 REVOKE ALL ON public.cancellation_policies, public.cancellation_policy_versions,
-  public.cancellation_policy_bindings, public.cancellation_policy_snapshots,
+  public.cancellation_policy_bindings, public.cancellation_policy_cutovers,
+  public.cancellation_policy_snapshots,
   public.cancellation_decisions FROM anon, authenticated;
 GRANT SELECT ON public.cancellation_policies, public.cancellation_policy_versions,
-  public.cancellation_policy_bindings, public.cancellation_policy_snapshots,
+  public.cancellation_policy_bindings, public.cancellation_policy_cutovers,
+  public.cancellation_policy_snapshots,
   public.cancellation_decisions TO authenticated;
 GRANT ALL ON public.cancellation_policies, public.cancellation_policy_versions,
-  public.cancellation_policy_bindings, public.cancellation_policy_snapshots,
+  public.cancellation_policy_bindings, public.cancellation_policy_cutovers,
+  public.cancellation_policy_snapshots,
   public.cancellation_decisions TO service_role;
 
 REVOKE ALL ON FUNCTION public.ensure_cancellation_policy_presets(UUID),
   public.create_cancellation_policy_snapshot(UUID,TEXT,TEXT,UUID,TIMESTAMPTZ,TIMESTAMPTZ,UUID,UUID,UUID,UUID,UUID,JSONB,JSONB),
-  public.create_legacy_cancellation_snapshot(UUID,TEXT,TEXT,UUID,TIMESTAMPTZ,UUID,UUID,JSONB,JSONB,JSONB,JSONB,JSONB),
   public.cancellation_subject_state(TEXT,UUID,UUID,BOOLEAN,TIMESTAMPTZ,TEXT,TEXT),
   public.confirm_cancellation_policy_v1(TEXT,UUID,UUID,TEXT,TEXT,BOOLEAN,TEXT,TEXT,TEXT,TEXT,TEXT),
+  public.cancellation_policy_rollout_preflight(UUID),
   public.set_cancellation_policy_binding(UUID,TEXT,TEXT,TEXT,UUID,UUID,TEXT),
   public.reconcile_receipt_policy_refund(UUID,TEXT,TEXT,JSONB,TEXT)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.ensure_cancellation_policy_presets(UUID),
   public.create_cancellation_policy_snapshot(UUID,TEXT,TEXT,UUID,TIMESTAMPTZ,TIMESTAMPTZ,UUID,UUID,UUID,UUID,UUID,JSONB,JSONB),
-  public.create_legacy_cancellation_snapshot(UUID,TEXT,TEXT,UUID,TIMESTAMPTZ,UUID,UUID,JSONB,JSONB,JSONB,JSONB,JSONB),
   public.cancellation_subject_state(TEXT,UUID,UUID,BOOLEAN,TIMESTAMPTZ,TEXT,TEXT),
   public.confirm_cancellation_policy_v1(TEXT,UUID,UUID,TEXT,TEXT,BOOLEAN,TEXT,TEXT,TEXT,TEXT,TEXT),
+  public.cancellation_policy_rollout_preflight(UUID),
   public.set_cancellation_policy_binding(UUID,TEXT,TEXT,TEXT,UUID,UUID,TEXT),
   public.reconcile_receipt_policy_refund(UUID,TEXT,TEXT,JSONB,TEXT),
   public.commerce_r2a_reconcile_refund(UUID,TEXT,TEXT,JSONB,TEXT)
@@ -1327,7 +1698,9 @@ GRANT EXECUTE ON FUNCTION public.cancellation_policy_public_projection(UUID,TEXT
   TO anon, authenticated, service_role;
 
 COMMENT ON TABLE public.cancellation_policy_snapshots IS
-  'Immutable purchase-time cancellation terms and provenance. Existing ambiguous sales preserve legacy behavior.';
+  'Immutable Policy V1 purchase-time terms. Historical sales never receive manufactured snapshots.';
+COMMENT ON TABLE public.cancellation_policy_cutovers IS
+  'Durable forward-only Policy V1 authority boundary. Absence means the family is excluded.';
 COMMENT ON FUNCTION public.cancellation_subject_state(TEXT,UUID,UUID,BOOLEAN,TIMESTAMPTZ,TEXT,TEXT) IS
   'Single server-authoritative preview evaluator. Exact boundaries use strict now < deadline semantics.';
 COMMENT ON FUNCTION public.confirm_cancellation_policy_v1(TEXT,UUID,UUID,TEXT,TEXT,BOOLEAN,TEXT,TEXT,TEXT,TEXT,TEXT) IS

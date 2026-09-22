@@ -1819,6 +1819,9 @@ async function handleCourtBooking(
       participation_funding_source_id: includedHoursPerCourt > 0 ? (meta.membership_id || null) : session.id,
       participation_funder: includedHoursPerCourt > 0 ? 'subscription' : 'self_prepaid',
       cancellation_policy_snapshot_id: meta.cancellation_policy_snapshot_id || null,
+      cancellation_policy_legacy_purchase_at: !meta.cancellation_policy_snapshot_id && Number(session.created || 0) > 0
+        ? new Date(Number(session.created) * 1000).toISOString()
+        : null,
     }));
 
   try {

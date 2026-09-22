@@ -68,7 +68,9 @@ BEGIN
   ) VALUES (
     p_booking_id,'c1500000-0000-4000-8000-000000000002',p_court_id,
     'c1500000-0000-4000-8000-000000000101','c1500000-0000-4000-8000-000000000111',
-    p_start_at,p_start_at+interval '1 hour','confirmed',p_amount_minor/100.0,'SEK',
+    p_start_at,p_start_at+interval '1 hour',
+    CASE WHEN p_policy_family='court_booking' THEN 'confirmed' ELSE 'pending' END::public.booking_status,
+    p_amount_minor/100.0,'SEK',
     'POL-'||right(p_booking_id::TEXT,8),CASE WHEN p_amount_minor>0 THEN 'cs_test_'||replace(p_booking_id::TEXT,'-','') ELSE NULL END,
     v_snapshot.id,'c1500000-0000-4000-8000-000000000101'
   );
@@ -180,9 +182,9 @@ BEGIN
     booking_ref,cancellation_policy_snapshot_id,booked_by
   ) VALUES
     ('c1500000-0000-4000-8000-000000000313','c1500000-0000-4000-8000-000000000002','c1500000-0000-4000-8000-000000000210',
-      'c1500000-0000-4000-8000-000000000101','c1500000-0000-4000-8000-000000000111',snap_a.start_at,snap_a.start_at+interval '1 hour','confirmed',165,'SEK','POL-EVENT-A',snap_a.id,'c1500000-0000-4000-8000-000000000101'),
+      'c1500000-0000-4000-8000-000000000101','c1500000-0000-4000-8000-000000000111',snap_a.start_at,snap_a.start_at+interval '1 hour','pending',165,'SEK','POL-EVENT-A',snap_a.id,'c1500000-0000-4000-8000-000000000101'),
     ('c1500000-0000-4000-8000-000000000314','c1500000-0000-4000-8000-000000000002','c1500000-0000-4000-8000-000000000211',
-      'c1500000-0000-4000-8000-000000000101','c1500000-0000-4000-8000-000000000111',snap_b.start_at,snap_b.start_at+interval '1 hour','confirmed',165,'SEK','POL-EVENT-B',snap_b.id,'c1500000-0000-4000-8000-000000000101');
+      'c1500000-0000-4000-8000-000000000101','c1500000-0000-4000-8000-000000000111',snap_b.start_at,snap_b.start_at+interval '1 hour','pending',165,'SEK','POL-EVENT-B',snap_b.id,'c1500000-0000-4000-8000-000000000101');
   IF (public.cancellation_subject_state('court_booking','c1500000-0000-4000-8000-000000000313','c1500000-0000-4000-8000-000000000101')->>'refund_mode') <> 'automatic_full'
     OR (public.cancellation_subject_state('court_booking','c1500000-0000-4000-8000-000000000314','c1500000-0000-4000-8000-000000000101')->>'refund_mode') <> 'none' THEN
     RAISE EXCEPTION 'event refundable/non-refundable decisions failed';

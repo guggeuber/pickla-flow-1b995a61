@@ -43,7 +43,8 @@ type AdminPolicyData = {
   }>;
   decisions: Array<{
     id: string;
-    snapshot_id: string;
+    policy_mode: "policy_v1" | "legacy";
+    snapshot_id: string | null;
     subject_type: string;
     subject_id: string;
     actor_mode: string;
@@ -67,6 +68,21 @@ type AdminPolicyData = {
     status: string;
     last_error?: string | null;
   }>;
+  cutovers: Array<{
+    authority_key: string;
+    preset_key: string;
+    schema_version: number;
+    enabled_at: string;
+  }>;
+  rollout_preflight: {
+    historical_business_rows_mutated: number;
+    historical_snapshots_created: number;
+    historical_fk_links_changed: number;
+    ambiguous_legacy_rows: number;
+    legacy_policy_details_unavailable: number;
+    post_cutover_missing_snapshot: number;
+    legacy_population: Record<string, number>;
+  } | null;
 };
 
 const FAMILY_LABELS: Record<string, string> = {
@@ -183,6 +199,19 @@ export default function AdminCancellationPolicies({ venueId }: { venueId?: strin
         </div>
       </section>
 
+      <section className="rounded-2xl border border-border bg-card p-4 text-xs">
+        <h3 className="text-sm font-bold">Forward-only cutover</h3>
+        <p className="mt-1 text-muted-foreground">
+          {data.cutovers.length} auktoriteter aktiverade · historiska köp ändrade: <b className="text-foreground">{data.rollout_preflight?.historical_business_rows_mutated ?? "—"}</b>
+          {" · "}historiska snapshots: <b className="text-foreground">{data.rollout_preflight?.historical_snapshots_created ?? "—"}</b>
+        </p>
+        <p className="mt-1 text-muted-foreground">
+          Legacy · policyuppgifter saknas: <b className="text-foreground">{data.rollout_preflight?.legacy_policy_details_unavailable ?? "—"}</b>
+          {" · "}bevisat tvetydig specialklass: <b className="text-foreground">{data.rollout_preflight?.ambiguous_legacy_rows ?? "—"}</b>
+          {" · "}nya köp utan snapshot: <b className={data.rollout_preflight?.post_cutover_missing_snapshot ? "text-destructive" : "text-foreground"}>{data.rollout_preflight?.post_cutover_missing_snapshot ?? "—"}</b>
+        </p>
+      </section>
+
       <section className="rounded-2xl border border-border bg-card p-4">
         <h3 className="text-sm font-bold">Staff override</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Explicit och auditerad. En avbokad plats släpps alltid; incheckningshistorik raderas aldrig.</p>
@@ -297,13 +326,13 @@ export default function AdminCancellationPolicies({ venueId }: { venueId?: strin
         {(data.decisions || []).length === 0 ? (
           <div className="rounded-xl border border-dashed border-border p-5 text-center text-xs text-muted-foreground">Inga policybeslut ännu.</div>
         ) : data.decisions.slice(0, 20).map((decision) => {
-          const snapshot = snapshotsById.get(decision.snapshot_id);
+          const snapshot = decision.snapshot_id ? snapshotsById.get(decision.snapshot_id) : undefined;
           const refund = refundsByDecision.get(decision.id);
           return (
             <div key={decision.id} className="rounded-xl border border-border bg-card p-3 text-xs">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="font-bold">{snapshot?.copy_sv?.title || snapshot?.policy_key || "Policy"} · v{snapshot?.policy_version ?? "legacy"}</p>
+                  <p className="font-bold">{decision.policy_mode === "legacy" ? "Legacy policy · Köpt före Policy V1" : `${snapshot?.copy_sv?.title || snapshot?.policy_key || "Policy V1"} · v${snapshot?.policy_version ?? "—"}`}</p>
                   <p className="mt-1 text-muted-foreground">{decision.subject_type} · {decision.subject_id}</p>
                 </div>
                 <span className="rounded-full bg-muted px-2 py-1 font-semibold">{decision.actor_mode === "staff_override" ? "Staff override" : "Kund"}</span>
@@ -313,7 +342,7 @@ export default function AdminCancellationPolicies({ venueId }: { venueId?: strin
                 <span>Kapacitet: <b className="text-foreground">Released</b></span>
                 <span>Refund: <b className="text-foreground">{money(decision.refund_amount_minor, decision.currency)} · {refund?.status || decision.refund_mode}</b></span>
                 <span>Entitlement: <b className="text-foreground">{decision.entitlement_restore_mode}</b></span>
-                <span className="col-span-2">Snapshot: <b className="text-foreground">{snapshot?.provenance || "—"}</b> · köpt {snapshot?.created_at ? new Date(snapshot.created_at).toLocaleString("sv-SE") : "—"}</span>
+                <span className="col-span-2">{decision.policy_mode === "legacy" ? <><b className="text-foreground">Legacy · policyuppgifter saknas</b> · ingen kontraktssnapshot skapad</> : <>Snapshot: <b className="text-foreground">{snapshot?.provenance || "—"}</b> · köpt {snapshot?.created_at ? new Date(snapshot.created_at).toLocaleString("sv-SE") : "—"}</>}</span>
                 {decision.staff_reason ? <span className="col-span-2">Motivering: <b className="text-foreground">{decision.staff_reason}</b></span> : null}
                 {refund?.last_error ? <span className="col-span-2 text-destructive">Refundfel: {refund.last_error}</span> : null}
               </div>

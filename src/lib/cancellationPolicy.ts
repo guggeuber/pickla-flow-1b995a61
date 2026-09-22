@@ -19,7 +19,9 @@ export type CancellationDecision = {
   subject_type: CancellationSubjectType;
   subject_id: string;
   venue_id: string;
-  snapshot_id: string;
+  policy_mode: "policy_v1" | "legacy";
+  snapshot_id: string | null;
+  authority_key?: string;
   policy_family: string;
   policy_key: string;
   policy_version: number | null;
@@ -175,15 +177,18 @@ export function cancellationDecisionCopy(decision: CancellationDecision, locale:
   } as Record<string, string>)[decision.reason_code];
 
   const policyCopy = english ? decision.copy_en : decision.copy_sv;
+  const legacy = decision.policy_mode === "legacy";
 
   return {
-    title: policyCopy?.title || (english ? "Cancellation policy" : "Avbokningsvillkor"),
+    title: policyCopy?.title || (legacy ? "Legacy policy" : english ? "Cancellation policy" : "Avbokningsvillkor"),
     summary: policyCopy?.summary || (english ? "The place is released immediately when cancellation is confirmed." : "Platsen släpps direkt när avbokningen bekräftas."),
     outcome: blocked || `${refund} ${restore}`,
     cancelDeadline: cancelDeadline ? english ? `Cancellation deadline: ${cancelDeadline}.` : `Avbokning senast: ${cancelDeadline}.` : null,
     refundDeadline: refundDeadline ? english ? `Refund cutoff: strictly before ${refundDeadline}.` : `Återbetalningsgräns: strikt före ${refundDeadline}.` : null,
     confirmLabel: decision.refund_mode === "automatic_full"
       ? english ? `Cancel and refund ${amount}` : `Avboka och återbetala ${amount}`
+      : decision.refund_mode === "manual_legacy"
+        ? english ? "Cancel · refund reviewed" : "Avboka · återbetalning granskas"
       : english ? "Cancel without refund" : "Avboka utan återbetalning",
   };
 }

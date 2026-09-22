@@ -31,6 +31,7 @@ import {
 } from '../_shared/entitlements.ts';
 import { isUpstreamTransportError } from '../_shared/upstream_transport.ts';
 import { confirmCancellationAndDispatchRefund } from '../_shared/cancellation_execution.ts';
+import { legacyCancellationProjection } from '../_shared/cancellation_cutover.ts';
 import {
   optionalStripeRuntimeEnvironment,
   requireStripeRuntimeEnvironment,
@@ -793,18 +794,18 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
   }
   let cancellationPolicy = null;
   if (participation) {
+    const policyFamily = participation.league_team_entry_id
+      ? 'league_team'
+      : participation.activity_series_id
+        ? ['social_event', 'tournament'].includes(String(courseAccess?.presentation_type || '')) ? 'event' : 'managed_course'
+        : 'occurrence_ticket';
     if (participation.cancellation_policy_snapshot_id) {
       const { data: snapshot, error: snapshotError } = await admin.from('cancellation_policy_snapshots')
-        .select('id,policy_key,policy_version,policy_family,provenance,rules,copy_sv,copy_en,cancel_deadline_at,refund_deadline_at')
+        .select('id,authority_key,policy_key,policy_version,policy_family,provenance,rules,copy_sv,copy_en,cancel_deadline_at,refund_deadline_at,terms_accepted_at')
         .eq('id', participation.cancellation_policy_snapshot_id).maybeSingle();
       if (snapshotError) throw new Error(snapshotError.message);
-      cancellationPolicy = snapshot ? { ...snapshot, source: 'purchase_snapshot' } : null;
-    } else {
-      const policyFamily = participation.league_team_entry_id
-        ? 'league_team'
-        : participation.activity_series_id
-          ? ['social_event', 'tournament'].includes(String(courseAccess?.presentation_type || '')) ? 'event' : 'managed_course'
-          : 'occurrence_ticket';
+      cancellationPolicy = snapshot ? { ...snapshot, policy_mode: 'policy_v1', source: 'purchase_snapshot' } : null;
+    } else if (order.status === 'draft') {
       const { data: projection, error: projectionError } = await admin.rpc('cancellation_policy_public_projection', {
         p_venue_id: order.venue_id,
         p_policy_family: policyFamily,
@@ -814,6 +815,16 @@ async function cartResponse(admin: AdminClient, order: any, token?: string | nul
       });
       if (projectionError) throw new Error(projectionError.message);
       cancellationPolicy = projection;
+    } else {
+      const authorityKey = policyFamily === 'event'
+        ? 'refundable_event'
+        : policyFamily;
+      cancellationPolicy = await legacyCancellationProjection(admin, {
+        venueId: order.venue_id,
+        authorityKey,
+        policyFamily,
+        purchaseAt: order.checkout_frozen_at || order.paid_at || order.created_at,
+      });
     }
   }
   return {
@@ -3140,7 +3151,8 @@ const commerceHandler = async (req: Request) => {
       const refreshed = await loadOrderByReference(admin, order.id, userId, true);
       return jsonResponse({
         ...(await cartResponse(admin, refreshed)),
-        cancellation_policy_v1: true,
+        cancellation_policy_v1: preview.policy_mode === 'policy_v1',
+        cancellation_policy_mode: preview.policy_mode,
         participation_cancelled: true,
         refund_status: result.refundStatus,
         refund_processing: result.refundProcessing,
