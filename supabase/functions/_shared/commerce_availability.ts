@@ -6,6 +6,7 @@ export type CommerceProductLike = {
   standalone_enabled?: boolean | null;
   activity_addon_enabled?: boolean | null;
   commerce_kind?: string | null;
+  product_kind?: string | null;
   fulfillment_type?: string | null;
   fulfillment_presentation?: string | null;
   base_price_sek?: number | string | null;
@@ -135,7 +136,7 @@ export function deriveCommerceCompatibilityFields(
   return {
     status,
     is_active: isActive,
-    product_kind: participation ? existing?.product_kind || 'day_access' : commerceKind,
+    product_kind: participation ? input.product_kind || existing?.product_kind || 'day_access' : commerceKind,
     commerce_kind: commerceKind,
     fulfillment_type: fulfillmentType,
     commerce_enabled: compatibilityEnabled,

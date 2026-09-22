@@ -62,6 +62,7 @@ async function validatedTierPricingWrite(admin: ReturnType<typeof getServiceClie
   fixedPrice: unknown;
   discountPercent: unknown;
   excludeId?: string | null;
+  allowDraftProduct?: boolean;
 }): Promise<{ value?: TierPricingWrite; error?: string; status?: number }> {
   const { data: tier, error: tierError } = await admin.from('membership_tiers')
     .select('id, venue_id, is_active, is_assignable')
@@ -80,7 +81,10 @@ async function validatedTierPricingWrite(admin: ReturnType<typeof getServiceClie
     .eq('product_key', productType)
     .maybeSingle();
   if (productError || !product) return { error: 'Produkten finns inte på medlemsnivåns anläggning', status: 404 };
-  if (product.is_active !== true || product.status !== 'active') return { error: 'Produkten är inte aktiv', status: 409 };
+  if (product.is_active !== true || product.status !== 'active') {
+    const isAllowedDraft = input.allowDraftProduct === true && product.is_active === false && product.status === 'draft';
+    if (!isAllowedDraft) return { error: 'Produkten är inte aktiv', status: 409 };
+  }
   if (product.product_key !== productType) return { error: 'Produkten kan inte prissättas med den angivna produktnyckeln', status: 400 };
 
   const fixedPrice = optionalNumber(input.fixedPrice);
@@ -375,7 +379,7 @@ Deno.serve(async (req) => {
     // POST /api-memberships/tier-pricing
     if (req.method === 'POST' && path === 'tier-pricing') {
       const body = await req.json();
-      const { tierId, product_type, fixed_price, discount_percent, vat_rate, label } = body;
+      const { tierId, product_type, fixed_price, discount_percent, vat_rate, label, allow_draft_product } = body;
       if (!tierId || !product_type) return errorResponse('Missing tierId or product_type');
 
       const { data: tier } = await admin.from('membership_tiers').select('venue_id').eq('id', tierId).maybeSingle();
@@ -386,6 +390,7 @@ Deno.serve(async (req) => {
         productType: product_type,
         fixedPrice: fixed_price,
         discountPercent: discount_percent,
+        allowDraftProduct: allow_draft_product === true,
       });
       if (!validation.value) return errorResponse(validation.error || 'Ogiltig medlemsprisregel', validation.status || 400);
 

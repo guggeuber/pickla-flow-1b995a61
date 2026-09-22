@@ -5,6 +5,7 @@ export type ProductCatalogSort = "name" | "price_asc" | "price_desc";
 export interface CatalogProductLike {
   name: string;
   description?: string | null;
+  commerce_kind?: string | null;
   status: ProductCatalogStatus;
   standalone_enabled: boolean;
   activity_addon_enabled: boolean;
@@ -23,10 +24,33 @@ export interface ProductCatalogFilters {
 }
 
 export function productSalesModeLabel(product: CatalogProductLike) {
+  if (product.commerce_kind === "participation") return "Aktivitetsbiljett";
   if (product.standalone_enabled && product.activity_addon_enabled) return "Butik + aktivitet";
   if (product.standalone_enabled) return "Butik";
   if (product.activity_addon_enabled) return "Aktivitetstillval";
   return "Inte till salu";
+}
+
+export interface ActivityProductLike {
+  product_key: string;
+  product_kind?: string | null;
+  commerce_kind?: string | null;
+  fulfillment_type?: string | null;
+  session_type?: string | null;
+  status?: string | null;
+  is_active?: boolean | null;
+}
+
+export function isCanonicalActivityProduct(product: ActivityProductLike, sessionType?: string | null) {
+  const isTicket = product.product_kind === "session_ticket" || product.product_kind === "session_with_day_access";
+  const isDayAccess = product.product_kind === "day_access" || product.product_key === "day_access";
+  const sessionMatches = !sessionType || isDayAccess || !product.session_type || product.session_type === sessionType;
+  return product.status === "active"
+    && product.is_active === true
+    && product.commerce_kind === "participation"
+    && product.fulfillment_type === "participation"
+    && (isTicket || isDayAccess)
+    && sessionMatches;
 }
 
 export function filterAndSortProducts<T extends CatalogProductLike>(products: T[], filters: ProductCatalogFilters) {

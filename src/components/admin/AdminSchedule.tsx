@@ -7,6 +7,7 @@ import { DateTime } from "luxon";
 import { formatSek } from "@/lib/activityPricing";
 import { ApiRequestError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { isValidActivitySessionTimeOrder } from "@/lib/activitySessionTime";
+import { isCanonicalActivityProduct } from "@/lib/adminProductCatalog";
 import AdminCourses from "@/components/admin/AdminCourses";
 import { namedEventImagePath, nextNamedEventImageSlot, removeNamedEventImage, uploadNamedEventImage } from "@/lib/eventMedia";
 
@@ -75,6 +76,11 @@ type ScheduleProductOption = {
   product_key: string;
   name: string;
   base_price_sek?: number | null;
+  product_kind?: string | null;
+  commerce_kind?: string | null;
+  fulfillment_type?: string | null;
+  session_type?: string | null;
+  is_active?: boolean | null;
   activity_addon_enabled?: boolean;
   status?: string | null;
   [key: string]: unknown;
@@ -471,9 +477,6 @@ const draftWarnings = (draft: {
   if (soldAs === "activity_ticket" && !draft.included_in_day_pass && isOpenPlayLike(sessionType)) {
     warnings.push({ message: "Passet ingår inte i dagsmedlemskap. Kunder med dagsmedlemskap får inte access." });
   }
-  if (draft.product_key && !["open_play_slot", "group_training", "day_access", "event_fee"].includes(draft.product_key)) {
-    warnings.push({ message: "Den valda produkten stöds inte av schemat ännu. Välj en annan produkt innan passet publiceras.", blocking: true });
-  }
   return warnings;
 };
 
@@ -519,6 +522,7 @@ const memberPriceForProduct = ({
 };
 
 const pricingPreview = ({
+  productKey,
   onlinePrice,
   deskPrice,
   corporatePrice,
@@ -530,6 +534,7 @@ const pricingPreview = ({
   tiers,
   tierPricing,
 }: {
+  productKey?: string | null;
   onlinePrice: number;
   deskPrice?: number;
   corporatePrice?: number | null;
@@ -568,11 +573,11 @@ const pricingPreview = ({
       ...optionalRows,
     ];
   }
-  const productKey = productKeyForActivityTicket(sessionType);
+  const resolvedProductKey = productKey || productKeyForActivityTicket(sessionType);
   return [
     ["Online", formatSek(price)],
     ["Desk", formatSek(desk)],
-    ["Pickla Access / Play", memberPriceForProduct({ productKey, basePrice: price, tiers, tierPricing })],
+    ["Pickla Access / Play", memberPriceForProduct({ productKey: resolvedProductKey, basePrice: price, tiers, tierPricing })],
     ["Unlimited / Play+", includedInUnlimited ? "Ingår" : "Ej inkluderat"],
     ["Dagsmedlemskap", includedInDayPass ? "Ingår idag" : "Ej access"],
     ...optionalRows,
@@ -618,6 +623,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     queryKey: ["admin-access-products", venueId],
     queryFn: () => apiGet("api-admin", "products", { venueId }),
   });
+  const activityProducts = useMemo(() => products.filter((product) => isCanonicalActivityProduct(product)), [products]);
   const { data: productRelationships = [] } = useQuery<ProductRelationship[]>({
     queryKey: ["admin-product-relationships", venueId],
     queryFn: () => apiGet("api-admin", "product-relationships", { venueId }),
@@ -1100,6 +1106,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
     section?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   const createPreview = pricingPreview({
+    productKey: createConfig.product_key,
     onlinePrice: createOnlinePrice,
     deskPrice: numericPrice(deskPrice || createOnlinePrice, createOnlinePrice),
     corporatePrice: optionalPrice(corporatePrice),
@@ -1144,7 +1151,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           </select>
           <select value={seriesProduct} onChange={(e) => setSeriesProduct(e.target.value)} className={baseInputClass} style={inputStyle}>
             <option value="">Ingen standardprodukt</option>
-            {products.map((product) => <option key={product.id} value={product.product_key}>{product.name}</option>)}
+            {activityProducts.map((product) => <option key={product.id} value={product.product_key}>{product.name}</option>)}
           </select>
         </div>
         <button onClick={handleCreateSeries} disabled={createSeries.isPending} className="w-full rounded-xl bg-primary py-2.5 text-sm font-bold text-primary-foreground disabled:opacity-50 flex items-center justify-center gap-2">
@@ -1171,7 +1178,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                       </select>
                       <select value={draft.product_key || ""} onChange={(e) => setSeriesDrafts((current) => ({ ...current, [item.id]: { ...draft, product_key: e.target.value } }))} className={baseInputClass} style={inputStyle}>
                         <option value="">Ingen produkt</option>
-                        {products.map((product) => <option key={product.id} value={product.product_key}>{product.name}</option>)}
+                        {activityProducts.map((product) => <option key={product.id} value={product.product_key}>{product.name}</option>)}
                       </select>
                       <select value={draft.status || "active"} onChange={(e) => setSeriesDrafts((current) => ({ ...current, [item.id]: { ...draft, status: e.target.value } }))} className={baseInputClass} style={inputStyle}>
                         <option value="active">Aktiv</option>
@@ -1265,6 +1272,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             onChange={(e) => {
               const nextType = e.target.value;
               setSessionType(nextType);
+              setIncludedInDayPass(isOpenPlayLike(nextType));
               setIncludedInUnlimited(isOpenPlayLike(nextType));
               setSessionProductKey(productKeyForActivityTicket(nextType));
             }}
@@ -1286,7 +1294,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
             className="w-full rounded-xl px-3 py-2.5 text-xs outline-none"
             style={inputStyle}
           >
-            {products.map((product) => (
+            {activityProducts.filter((product) => isCanonicalActivityProduct(product, sessionType)).map((product) => (
               <option key={product.id} value={product.product_key}>{product.name}</option>
             ))}
           </select>
@@ -1474,6 +1482,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
               })
             : sessionWarnings(session);
           const activePreview = pricingPreview({
+            productKey: activeDraftConfig.product_key,
             onlinePrice: numericPrice(isEditing ? draft.online_price_sek ?? draft.price_sek ?? sessionOnlinePrice(session) : sessionOnlinePrice(session)),
             deskPrice: numericPrice(isEditing ? draft.desk_price_sek ?? sessionDeskPrice(session) : sessionDeskPrice(session)),
             corporatePrice: optionalPrice(isEditing ? draft.corporate_price_sek : sessionMetadata(session).corporate_price_sek),
@@ -1512,6 +1521,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                           [session.id]: {
                             ...draft,
                             session_type: nextType,
+                            included_in_day_pass: isOpenPlayLike(nextType),
                             included_in_unlimited: isOpenPlayLike(nextType),
                           },
                         }));
@@ -1547,7 +1557,7 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         className="w-full rounded-xl px-3 py-2.5 text-xs outline-none"
                         style={inputStyle}
                       >
-                        {products.map((productOption) => (
+                        {activityProducts.filter((productOption) => isCanonicalActivityProduct(productOption, draft.session_type || session.session_type || "open_play")).map((productOption) => (
                           <option key={productOption.id} value={productOption.product_key}>{productOption.name}</option>
                         ))}
                       </select>

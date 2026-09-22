@@ -260,7 +260,7 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
       ? 'day_access'
       : soldAs === 'included_only'
       ? null
-      : productKeyForActivityTicket(sessionType);
+      : next.product_key || productKeyForActivityTicket(sessionType);
 
     const policy = next.access_policy && typeof next.access_policy === 'object' ? next.access_policy : {};
     next.access_policy = {
@@ -320,9 +320,6 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
     next.first_visit_only = true;
   }
 
-  if (productKey && !['open_play_slot', 'group_training', 'day_access', 'event_fee'].includes(String(productKey))) {
-    throw new Error(`Unknown product_key for schedule session: ${productKey}`);
-  }
   if (isPublished && productKey !== null && capacity !== null && capacity <= 0) {
     throw new Error('Published paid sessions need capacity');
   }
@@ -337,6 +334,37 @@ function normalizeActivitySessionPayload(body: Record<string, any>) {
   }
 
   return next;
+}
+
+async function validateActivitySessionProduct(
+  admin: ReturnType<typeof getServiceClient>,
+  venueId: string,
+  draft: Record<string, unknown>,
+) {
+  const productKey = String(draft.product_key || '').trim();
+  if (!productKey) return { ok: true as const };
+
+  const { data: product, error } = await admin
+    .from('access_products')
+    .select('id, product_key, product_kind, commerce_kind, fulfillment_type, session_type, status, is_active')
+    .eq('venue_id', venueId)
+    .eq('product_key', productKey)
+    .maybeSingle();
+  if (error) return { ok: false as const, status: 500, message: error.message };
+  if (!product) return { ok: false as const, status: 400, message: `Unknown product_key for schedule session: ${productKey}` };
+  if (product.status !== 'active' || product.is_active !== true) {
+    return { ok: false as const, status: 409, message: 'Aktivitetsprodukten måste vara aktiv innan den kan användas i schemat.' };
+  }
+  const isDayAccess = product.product_kind === 'day_access' || product.product_key === 'day_access';
+  const isSessionTicket = ['session_ticket', 'session_with_day_access'].includes(String(product.product_kind || ''));
+  if (product.commerce_kind !== 'participation' || product.fulfillment_type !== 'participation' || (!isDayAccess && !isSessionTicket)) {
+    return { ok: false as const, status: 400, message: 'Vald produkt är inte en kanonisk aktivitetsbiljett.' };
+  }
+  const sessionType = String(draft.session_type || 'open_play');
+  if (!isDayAccess && product.session_type && product.session_type !== sessionType) {
+    return { ok: false as const, status: 400, message: 'Aktivitetsproduktens aktivitetstyp matchar inte passet.' };
+  }
+  return { ok: true as const };
 }
 
 function normalizeHostCustomerIds(value: unknown) {
@@ -6499,7 +6527,7 @@ Deno.serve(async (req) => {
 
     if (req.method === 'POST' && path === 'products') {
       const {
-        venueId: _v, product_key, name, description, session_type,
+        venueId: _v, product_key, name, description, product_kind, session_type,
         base_price_sek, vat_rate, grants, sort_order, status,
         standalone_enabled, activity_addon_enabled, fulfillment_presentation,
         category, sport, image_url, commerce_kind, inventory_policy,
@@ -6513,7 +6541,11 @@ Deno.serve(async (req) => {
         fulfillment_presentation,
         category,
         commerce_kind,
+        product_kind,
       });
+      if (compatibility.commerce_kind === 'participation' && !['day_access', 'session_ticket', 'session_with_day_access'].includes(String(compatibility.product_kind || ''))) {
+        return errorResponse('Participation products require an access product kind', 400);
+      }
       const tracked = inventory_policy === 'tracked';
       if (tracked && commerce_kind !== 'merchandise') return errorResponse('Tracked products must be explicit merchandise', 400);
       const { data: productVenue, error: productVenueError } = tracked
@@ -7048,6 +7080,8 @@ Deno.serve(async (req) => {
       if (!isValidActivitySessionTimeOrder(draft.start_time, draft.end_time)) {
         return errorResponse('Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.', 400);
       }
+      const productValidation = await validateActivitySessionProduct(admin, venueId, draft);
+      if (!productValidation.ok) return errorResponse(productValidation.message, productValidation.status);
       const hostValidation = await validateActivitySessionHostCustomers(admin, hostCustomerIds);
       if (!hostValidation.ok) return errorResponse(hostValidation.message, hostValidation.status);
       const courtValidation = await validateActivitySessionCourtAvailability(
@@ -7129,6 +7163,8 @@ Deno.serve(async (req) => {
       if (!isValidActivitySessionTimeOrder(draft.start_time, draft.end_time)) {
         return errorResponse('Sluttiden måste vara efter starttiden. 00:00 betyder midnatt vid dagens slut.', 400);
       }
+      const productValidation = await validateActivitySessionProduct(admin, venueId, draft);
+      if (!productValidation.ok) return errorResponse(productValidation.message, productValidation.status);
       const scheduleChanged = activitySessionScheduleChanged(existingSession, draft);
       if (scheduleChanged) {
         const earliestEffectiveFrom = DateTime.now().setZone('Europe/Stockholm').plus({ days: 1 }).toISODate()!;

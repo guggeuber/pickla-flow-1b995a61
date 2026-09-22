@@ -72,6 +72,24 @@ export type AdminCommerceProduct = {
   inventory_summary?: InventorySummary;
 };
 
+export type AdminProductCreationKind = "participation" | "rental" | "merchandise";
+
+export function activityTicketProductFields(sessionType: string) {
+  return {
+    product_kind: "session_ticket" as const,
+    session_type: sessionType,
+    commerce_kind: "participation" as const,
+    fulfillment_presentation: "participation" as const,
+    inventory_policy: "stockless" as const,
+    standalone_enabled: false,
+    activity_addon_enabled: false,
+    grants: {
+      entitlement_type: "session_ticket",
+      includes_session_types: [sessionType],
+    },
+  };
+}
+
 export type OptionValue = { id: string; code: string; label: string; swatch: string | null; status: string };
 export type ProductOption = { id: string; code: string; label: string; product_option_values: OptionValue[] };
 export type ProductVariant = {

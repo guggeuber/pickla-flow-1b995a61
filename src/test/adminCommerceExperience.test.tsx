@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AdminProducts from "@/components/admin/AdminProducts";
 import { ProductMediaEditor } from "@/components/admin/commerce/ProductMediaEditor";
-import { buildVariantMatrix, productInventoryState, skuBaseFromName } from "@/lib/adminCommerce";
+import { activityTicketProductFields, buildVariantMatrix, productInventoryState, skuBaseFromName } from "@/lib/adminCommerce";
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), postForm: vi.fn(), patch: vi.fn(), remove: vi.fn() }));
 
@@ -164,6 +164,88 @@ describe("Admin OS Commerce experience", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-admin", "tracked-product-setup", expect.objectContaining({ tracked_sales_enabled: false })));
     await waitFor(() => expect(api.post.mock.calls.filter((call) => call[1] === "product-variants")).toHaveLength(8));
     expect(api.patch.mock.calls.some((call) => call[1] === "tracked-sales")).toBe(false);
+  });
+
+  it("creates Singelträning as the existing canonical session-ticket model and activates it after Founder pricing", async () => {
+    const baseGet = api.get.getMockImplementation();
+    api.get.mockImplementation((fn: string, endpoint: string, params?: Record<string, unknown>) => {
+      if (fn === "api-memberships" && endpoint === "tiers") {
+        return Promise.resolve([{ id: "founder-tier", name: "Founder", is_active: true }]);
+      }
+      return baseGet?.(fn, endpoint, params);
+    });
+    const participationProduct = {
+      ...savedProduct,
+      id: "22222222-2222-4222-8222-222222222222",
+      product_key: "singeltraning",
+      name: "Singelträning",
+      product_kind: "session_ticket",
+      session_type: "group_training",
+      base_price_sek: 199,
+      vat_rate: 6,
+      commerce_kind: "participation",
+      fulfillment_type: "participation",
+      fulfillment_presentation: "participation",
+      inventory_policy: "stockless",
+      standalone_enabled: false,
+      status: "draft",
+      is_active: false,
+    };
+    api.post.mockImplementation((fn: string, endpoint: string) => {
+      if (fn === "api-admin" && endpoint === "products") {
+        products = [participationProduct];
+        return Promise.resolve({ ...participationProduct });
+      }
+      if (fn === "api-memberships" && endpoint === "tier-pricing") return Promise.resolve({ id: "founder-price" });
+      return Promise.resolve({});
+    });
+    api.patch.mockImplementation((_fn: string, endpoint: string) => {
+      if (endpoint === "products") {
+        const active = { ...participationProduct, status: "active", is_active: true, commerce_enabled: true };
+        products = [active];
+        return Promise.resolve(active);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<AdminProducts venueId={venueId} />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole("button", { name: "Ny produkt" }));
+    fireEvent.click(screen.getByRole("button", { name: /Aktivitetsbiljett \/ tjänst/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+
+    fireEvent.change(screen.getByLabelText("Namn"), { target: { value: "Singelträning" } });
+    fireEvent.change(screen.getByLabelText("Pris SEK"), { target: { value: "199" } });
+    expect(screen.getByLabelText("Moms %")).toHaveValue(6);
+    expect(screen.getByLabelText(/Founder-rabatt %/)).toHaveValue(20);
+    expect(screen.getByText(/Ingår inte automatiskt i Day, Play eller Play\+/)).toBeInTheDocument();
+    expect(screen.getByText(/Standard 12h via Policy V1/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fortsätt" }));
+    const createButton = screen.getByRole("button", { name: "Skapa aktivitetsprodukt" });
+    await waitFor(() => expect(createButton).toBeEnabled());
+    fireEvent.click(createButton);
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-admin", "products", expect.objectContaining({
+      name: "Singelträning",
+      base_price_sek: 199,
+      vat_rate: 6,
+      status: "draft",
+      ...activityTicketProductFields("group_training"),
+    })));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("api-memberships", "tier-pricing", {
+      tierId: "founder-tier",
+      product_type: "singeltraning",
+      fixed_price: null,
+      discount_percent: 20,
+      vat_rate: 6,
+      label: "Singelträning",
+      allow_draft_product: true,
+    }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith("api-admin", "products", expect.objectContaining({
+      productId: participationProduct.id,
+      status: "active",
+    })));
   });
 
   it("shows Products, Inventory and Orders as one Admin OS workspace", async () => {
