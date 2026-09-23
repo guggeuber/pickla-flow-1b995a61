@@ -216,7 +216,7 @@ try {
     commerce_order_id: ids.order,
     product_key: `recovery_product_${run}`,
     product_name: "Recovery fixture",
-    commerce_kind: "retail",
+    commerce_kind: "rental",
     quantity: 1,
     unit_price_minor: 10000,
     line_total_inc_vat_minor: 10000,
@@ -224,8 +224,8 @@ try {
     vat_rate: 6,
     vat_amount_minor: 566,
     source_type: "catalog",
-    fulfillment_type: "none",
-    fulfillment_status: "not_required",
+    fulfillment_type: "desk_pickup",
+    fulfillment_status: "pending_pickup",
     inventory_policy: "stockless",
   } });
   await rest("commerce_orders", `id=eq.${ids.order}`, { method: "PATCH", body: { status: "paid" } });
