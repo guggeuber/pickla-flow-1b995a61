@@ -4449,7 +4449,7 @@ Deno.serve(async (req) => {
     const { ok, venueId: adminVenueId } = await isAdmin(userId);
     if (!ok) return errorResponse('Forbidden: admin only', 403);
 
-    const isWriteMethod = ['POST', 'PATCH', 'DELETE'].includes(req.method);
+    const isWriteMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
     const isMultipartMutation = isWriteMethod && req.headers.get('content-type')?.toLowerCase().includes('multipart/form-data');
     const mutationBody = !isWriteMethod
       ? {}

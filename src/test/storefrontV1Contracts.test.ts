@@ -70,4 +70,11 @@ describe("Storefront V1 server contracts", () => {
     expect(commerceSource).toContain("message.startsWith('Forbidden')");
     expect(commerceSource).toContain("requireVenueRole(");
   });
+
+  it("treats presentation PUT as an audited venue-scoped mutation", () => {
+    expect(adminSource).toContain("const isWriteMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)");
+    expect(adminSource).toContain("isVenueScopedWrite && venueId");
+    expect(adminSource).toContain("await requireVenueRole(admin, userId, venueId, ['venue_admin'])");
+    expect(adminSource).toContain("req.method === 'PUT' && path === 'product-presentation'");
+  });
 });
