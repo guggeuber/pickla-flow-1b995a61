@@ -2,6 +2,10 @@ import { corsHeaders, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { auditMutation } from '../_shared/authorization.ts';
 import { canonicalPublicOrigin } from '../_shared/canonical_origin.ts';
+import {
+  canListCustomers,
+  filterVenueEligibleProfiles,
+} from '../_shared/customer_access.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const cleanString = (value: unknown) => {
@@ -177,24 +181,6 @@ async function fetchByCustomerOrUser(admin: ReturnType<typeof getServiceClient>,
   return { data: Array.from(rows.values()), error: null };
 }
 
-async function assertCanListCustomers(admin: ReturnType<typeof getServiceClient>, userId: string, venueId: string) {
-  const [{ data: globalRole }, { data: venueStaff }] = await Promise.all([
-    admin.from('user_roles')
-      .select('role')
-      .eq('user_id', userId)
-      .eq('role', 'super_admin')
-      .maybeSingle(),
-    admin.from('venue_staff')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('venue_id', venueId)
-      .eq('is_active', true)
-      .maybeSingle(),
-  ]);
-
-  return Boolean(globalRole || venueStaff);
-}
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -285,10 +271,8 @@ Deno.serve(async (req) => {
       const venueId = cleanString(url.searchParams.get('venueId'));
       const admin = getServiceClient();
 
-      if (venueId) {
-        const canList = await assertCanListCustomers(admin, userId, venueId);
-        if (!canList) return errorResponse('Forbidden', 403);
-      }
+      const canList = await canListCustomers(admin, userId, venueId);
+      if (!canList) return errorResponse('Forbidden', 403);
 
       const fetchLimit = search ? 500 : limit;
       const venueProfilesResult = venueId
@@ -379,10 +363,7 @@ Deno.serve(async (req) => {
           ...(customers || []).map((customer: any) => customer.auth_user_id),
         ]));
         const eligibleCustomerIdSet = new Set(eligibleCustomerIds);
-        profiles = profiles.filter((profile: any) =>
-          (profile.customer_id && eligibleCustomerIdSet.has(profile.customer_id))
-          || (profile.auth_user_id && eligibleUserIds.has(profile.auth_user_id))
-        );
+        profiles = filterVenueEligibleProfiles(profiles, eligibleCustomerIdSet, eligibleUserIds);
       }
 
       const customerIds = uniqueStrings((customers || []).map((customer: any) => customer.id));
@@ -629,7 +610,7 @@ Deno.serve(async (req) => {
       }
 
       const admin = getServiceClient();
-      const canList = await assertCanListCustomers(admin, userId, venueId);
+      const canList = await canListCustomers(admin, userId, venueId);
       if (!canList) return errorResponse('Forbidden', 403);
 
       const today = new Date().toISOString().slice(0, 10);
@@ -1048,7 +1029,7 @@ Deno.serve(async (req) => {
       }
 
       const admin = getServiceClient();
-      const canList = await assertCanListCustomers(admin, userId, venueId);
+      const canList = await canListCustomers(admin, userId, venueId);
       if (!canList) return errorResponse('Forbidden', 403);
 
       const target = await resolveCustomerAuthTarget(admin, {

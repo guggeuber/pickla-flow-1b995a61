@@ -193,6 +193,22 @@ export async function linkCustomerToVenue(admin: any, customerId?: string | null
   const cleanVenueId = String(venueId || '').trim();
   if (!cleanCustomerId || !cleanVenueId) return;
 
+  const [{ data: customer, error: customerError }, { data: venue, error: venueError }] = await Promise.all([
+    admin.from('customers')
+      .select('id, organization_id, merged_into_id, status')
+      .eq('id', cleanCustomerId)
+      .maybeSingle(),
+    admin.from('venues')
+      .select('id, organization_id')
+      .eq('id', cleanVenueId)
+      .maybeSingle(),
+  ]);
+  if (customerError) throw new Error(customerError.message);
+  if (venueError) throw new Error(venueError.message);
+  if (!customer || !venue) throw new Error('Customer or venue not found');
+  if (customer.organization_id !== venue.organization_id) throw new Error('Customer identity scope mismatch');
+  if (customer.merged_into_id || customer.status !== 'active') throw new Error('Customer identity is not canonical');
+
   const now = new Date().toISOString();
   const { data: existing, error: existingError } = await admin
     .from('customer_venue_profiles')
@@ -280,6 +296,12 @@ export async function resolveOrCreateCustomerIdForUser(
   userId?: string | null,
   venueId?: string | null,
   source = 'customer_resolve',
+  identityInput?: {
+    displayName?: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    phone?: string | null;
+  },
 ): Promise<string | null> {
   const cleanUserId = String(userId || '').trim();
   if (!cleanUserId) return null;
@@ -290,32 +312,47 @@ export async function resolveOrCreateCustomerIdForUser(
   const email = normalizeEmail(authUser?.email);
   if (!authUser || email === PUBLIC_BOOKING_GUEST_EMAIL) return null;
 
-  const existingCustomerId = await resolveCustomerIdForUser(admin, cleanUserId);
-  if (existingCustomerId) {
-    await linkCustomerToVenue(admin, existingCustomerId, venueId, source);
-    return existingCustomerId;
-  }
-
-  const { data: authIdentity, error: authIdentityError } = await admin
-    .from('customer_identities')
-    .select('customer_id')
-    .eq('provider', 'auth')
-    .eq('provider_id', cleanUserId)
-    .limit(1)
-    .maybeSingle();
-  if (authIdentityError) throw new Error(authIdentityError.message);
-  if (authIdentity?.customer_id) {
-    await admin
-      .from('player_profiles')
-      .update({ customer_id: authIdentity.customer_id })
-      .eq('auth_user_id', cleanUserId)
-      .is('customer_id', null);
-    await linkCustomerToVenue(admin, authIdentity.customer_id, venueId, source);
-    return authIdentity.customer_id;
-  }
-
   const organizationId = await organizationIdForVenue(admin, venueId);
   if (!organizationId) throw new Error('Missing organization for customer identity');
+
+  const existingCustomerId = await resolveCustomerIdForUser(admin, cleanUserId);
+  if (existingCustomerId) {
+    const canonicalCustomerId = await resolveCanonicalCustomerId(admin, organizationId, existingCustomerId);
+    if (canonicalCustomerId !== existingCustomerId) {
+      const { error: profileUpdateError } = await admin
+        .from('player_profiles')
+        .update({ customer_id: canonicalCustomerId })
+        .eq('auth_user_id', cleanUserId);
+      if (profileUpdateError) throw new Error(profileUpdateError.message);
+    }
+    await linkCustomerToVenue(admin, canonicalCustomerId, venueId, source);
+    return canonicalCustomerId;
+  }
+
+  const { data: authIdentities, error: authIdentityError } = await admin
+    .from('customer_identities')
+    .select('customer_id, organization_id')
+    .eq('provider', 'auth')
+    .eq('provider_id', cleanUserId)
+    .limit(2);
+  if (authIdentityError) throw new Error(authIdentityError.message);
+  const typedAuthIdentities = (authIdentities || []) as Array<{
+    customer_id?: string | null;
+    organization_id?: string | null;
+  }>;
+  const foreignAuthIdentity = typedAuthIdentities.find((identity) => identity.organization_id !== organizationId);
+  if (foreignAuthIdentity) throw new Error('Customer identity scope mismatch');
+  const authIdentity = typedAuthIdentities.find((identity) => identity.organization_id === organizationId);
+  if (authIdentity?.customer_id) {
+    const canonicalCustomerId = await resolveCanonicalCustomerId(admin, organizationId, authIdentity.customer_id);
+    await admin
+      .from('player_profiles')
+      .update({ customer_id: canonicalCustomerId })
+      .eq('auth_user_id', cleanUserId)
+      .is('customer_id', null);
+    await linkCustomerToVenue(admin, canonicalCustomerId, venueId, source);
+    return canonicalCustomerId;
+  }
 
   const { data: profile, error: profileError } = await admin
     .from('player_profiles')
@@ -324,17 +361,23 @@ export async function resolveOrCreateCustomerIdForUser(
     .maybeSingle();
   if (profileError) throw new Error(profileError.message);
   if (profile?.customer_id) {
-    await linkCustomerToVenue(admin, profile.customer_id, venueId, source);
-    return profile.customer_id;
+    const canonicalCustomerId = await resolveCanonicalCustomerId(admin, organizationId, profile.customer_id);
+    await linkCustomerToVenue(admin, canonicalCustomerId, venueId, source);
+    return canonicalCustomerId;
   }
 
-  const displayName = cleanName(profile?.display_name)
+  const displayName = cleanName(identityInput?.displayName)
+    || cleanName([identityInput?.firstName, identityInput?.lastName].filter(Boolean).join(' '))
+    || cleanName(profile?.display_name)
     || cleanName([profile?.first_name, profile?.last_name].filter(Boolean).join(' '))
     || cleanName(authUser.user_metadata?.display_name)
     || cleanName(authUser.user_metadata?.full_name)
     || email
     || 'Kund';
-  const phone = normalizePhone(profile?.phone);
+  const firstName = cleanName(identityInput?.firstName) || cleanName(profile?.first_name);
+  const lastName = cleanName(identityInput?.lastName) || cleanName(profile?.last_name);
+  const primaryPhone = cleanName(identityInput?.phone) || cleanName(profile?.phone);
+  const phone = normalizePhone(primaryPhone);
 
   let customerId: string | null = null;
   if (email) {
@@ -373,10 +416,10 @@ export async function resolveOrCreateCustomerIdForUser(
         organization_id: organizationId,
         auth_user_id: cleanUserId,
         display_name: displayName,
-        first_name: profile?.first_name || null,
-        last_name: profile?.last_name || null,
+        first_name: firstName,
+        last_name: lastName,
         primary_email: email,
-        primary_phone: profile?.phone || null,
+        primary_phone: primaryPhone,
         email_normalized: email,
         phone_e164: phone,
         metadata: {
@@ -428,7 +471,7 @@ export async function resolveOrCreateCustomerIdForUser(
       organization_id: organizationId,
       provider: 'phone',
       provider_id: phone,
-      phone: profile?.phone || phone,
+      phone: primaryPhone || phone,
       metadata: { source },
     });
   }
