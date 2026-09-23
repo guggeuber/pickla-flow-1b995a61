@@ -164,6 +164,7 @@ describe("Storefront V1 inventory and location presentation", () => {
 
 describe("Storefront V1 media, routing and pricing projections", () => {
   it("switches to color-scoped media, retains shared assets and supports legacy cover", () => {
+    expect(storefrontMedia(tee()).map((media) => media.id)).toEqual(["black-front", "white-front", "black-back", "shared"]);
     expect(storefrontMedia(tee(), "black").map((media) => media.id)).toEqual(["black-front", "black-back", "shared"]);
     expect(storefrontMedia(tee(), "off-white").map((media) => media.id)).toEqual(["white-front", "shared"]);
     expect(storefrontMedia(tee({ media: [] }), "black")[0]).toMatchObject({ id: "tee-legacy-cover", url: "https://legacy.example/tee.webp" });

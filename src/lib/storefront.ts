@@ -125,8 +125,8 @@ export function storefrontMedia(product: CommerceProduct, colorValueId?: string 
   const shared = media.filter((item) => !item.option_value_id);
   const scoped = colorValueId ? media.filter((item) => item.option_value_id === colorValueId) : [];
   if (scoped.length > 0) return [...scoped, ...shared];
+  if (!colorValueId && media.length > 0) return media;
   if (shared.length > 0) return shared;
-  if (media.length > 0 && !colorValueId) return media;
   if (product.image_url) {
     return [{
       id: `${product.id}-legacy-cover`,
