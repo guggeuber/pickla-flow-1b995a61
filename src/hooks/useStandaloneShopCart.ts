@@ -140,7 +140,9 @@ export function useStandaloneShopCart(venueId?: string | null) {
   const queueQuantities = useCallback((next: Record<string, number>) => {
     if (!venueId || !cartQuery.data) return Promise.reject(new Error("Varukorgen är inte klar."));
     const baseQuantities = { ...quantities };
-    const normalized = Object.fromEntries(Object.entries(next).filter(([, quantity]) => Number(quantity) > 0));
+    const normalized = Object.fromEntries(
+      Object.entries(next).filter(([, quantity]) => Number(quantity) > 0),
+    ) as Record<string, number>;
     setOptimisticQuantities(normalized);
     setPendingUpdates((count) => count + 1);
 
@@ -196,9 +198,12 @@ export function useStandaloneShopCart(venueId?: string | null) {
     return task;
   }, [cartQuery, quantities, queryClient, queryKey, userId, venueId]);
 
-  const lineCount = useMemo(() => Object.values(quantities).reduce((sum, quantity) => sum + Number(quantity || 0), 0), [quantities]);
-  const resolvedTotalMinor = useMemo(() => (cartQuery.data?.lines || []).reduce(
-    (sum, line) => sum + Number(line.unit_price_minor || 0) * Number(line.quantity || 0),
+  const lineCount = useMemo<number>(() => Object.values(quantities).reduce<number>(
+    (sum, quantity) => sum + Number(quantity || 0),
+    0,
+  ), [quantities]);
+  const resolvedTotalMinor = useMemo<number>(() => (cartQuery.data?.lines || []).reduce<number>(
+    (sum, line) => sum + Number(line.unit_price_minor || 0) * Number(line.quantity || 0) - Number(line.discount_minor || 0),
     0,
   ), [cartQuery.data?.lines]);
 

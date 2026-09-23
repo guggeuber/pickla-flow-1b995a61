@@ -93,7 +93,10 @@ describe("CommerceShopPage", () => {
     expect(await screen.findByRole("heading", { name: "Pink Pickla Bag" })).toBeInTheDocument();
     expect(screen.getByTestId("pickla-top-bar")).toBeInTheDocument();
     expect(screen.queryByAltText("Väskans baksida")).not.toBeInTheDocument();
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("api-commerce", "catalog", { venueId }));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("api-commerce", "catalog", {
+      venueId,
+      locale: "sv-SE",
+    }));
 
     fireEvent.click(screen.getByRole("button", { name: "Visa bilder för Pink Pickla Bag" }));
     expect(screen.getByRole("dialog", { name: "Bilder för Pink Pickla Bag" })).toBeInTheDocument();

@@ -9,7 +9,9 @@ import { PicklaTopBar } from "@/components/PicklaTopBar";
 import { apiPost } from "@/lib/api";
 import {
   COMMERCE_PICKUP_COPY,
+  commerceCartItemFromKey,
   commerceCartItemKey,
+  commerceCartQuantitiesFromLines,
   commerceJourneyId,
   cancelCommerceCheckout,
   fetchCommerceOrder,
@@ -32,6 +34,7 @@ import {
 } from "@/lib/purchaseSessionRecovery";
 import { occurrenceCountLabel, seriesCustomerTitle, seriesPresentation } from "@/lib/seriesPresentation";
 import { fetchSocialPreferences, updateSocialPreferences } from "@/lib/sessionSocialContext";
+import { storefrontErrorMessage } from "@/lib/storefront";
 
 type ResolvedLine = CommerceOrderLine & { unit_price_minor: number; product_name: string };
 
@@ -45,7 +48,7 @@ function nestedNumber(value: unknown, path: string[]) {
 }
 
 function lineTotalMinor(line: CommerceOrderLine) {
-  return Number(line.unit_price_minor || 0) * Number(line.quantity || 1);
+  return Number(line.unit_price_minor || 0) * Number(line.quantity || 1) - Number(line.discount_minor || 0);
 }
 
 function originalUnitPriceMinor(line: CommerceOrderLine) {
@@ -123,15 +126,15 @@ export default function CommerceCartPage() {
     [orderQuery.data?.lines, resolveQuery.data?.lines],
   );
   const standaloneShopCart = orderQuery.data?.order.draft_scope === "shop";
-  const serverQuantities = useMemo(() => Object.fromEntries(lines.map((line) => [String(line.product_id || ""), Number(line.quantity || 0)])), [lines]);
+  const serverQuantities = useMemo(() => commerceCartQuantitiesFromLines(lines), [lines]);
   const visibleQuantities = standaloneQuantities || serverQuantities;
   const visibleLines = useMemo(() => standaloneShopCart
-    ? lines.filter((line) => Number(visibleQuantities[String(line.product_id || "")] || 0) > 0).map((line) => ({ ...line, quantity: Number(visibleQuantities[String(line.product_id || "")] || 0) }))
+    ? lines.filter((line) => Number(visibleQuantities[commerceCartItemKey({ product_id: String(line.product_id || ""), variant_id: line.variant_id || undefined, pickup_location_id: line.pickup_location_id || undefined })] || 0) > 0).map((line) => ({ ...line, quantity: Number(visibleQuantities[commerceCartItemKey({ product_id: String(line.product_id || ""), variant_id: line.variant_id || undefined, pickup_location_id: line.pickup_location_id || undefined })] || 0) }))
     : lines, [lines, standaloneShopCart, visibleQuantities]);
   const visibleItemCount = useMemo(() => visibleLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0), [visibleLines]);
   const total = useMemo(() => visibleLines.reduce((sum, line) => sum + lineTotalMinor(line), 0), [visibleLines]);
   const totalSavings = useMemo(() => lines.reduce((sum, line) => (
-    sum + Math.max(0, originalUnitPriceMinor(line) - Number(line.unit_price_minor || 0)) * Number(line.quantity || 1)
+    sum + Math.max(Number(line.discount_minor || 0), Math.max(0, originalUnitPriceMinor(line) - Number(line.unit_price_minor || 0)) * Number(line.quantity || 1))
   ), 0), [lines]);
   const hasParticipation = lines.some((line) => line.commerce_kind === "participation");
   const hasSelfParticipation = lines.some((line) => line.commerce_kind === "participation" && !line.dependent_participant_id);
@@ -177,7 +180,7 @@ export default function CommerceCartPage() {
       const latestResult = await orderQuery.refetch();
       const latest = latestResult.data;
       if (!latest) throw new Error("Varukorgen kunde inte uppdateras.");
-      const items = Object.entries(desired).map(([productId, quantity]) => ({ product_id: productId, quantity }));
+      const items = Object.entries(desired).map(([key, quantity]) => commerceCartItemFromKey(key, quantity));
       const sendUpdate = (auth: "session" | "omit") => updateCommerceCart({
         reference: token,
         expectedVersion: latest.order.version,
@@ -212,7 +215,7 @@ export default function CommerceCartPage() {
     }).catch(async (error: Error) => {
       setStandaloneQuantities(null);
       await orderQuery.refetch();
-      toast.error(error.message || "Varukorgen kunde inte uppdateras.");
+      toast.error(standaloneShopCart ? storefrontErrorMessage(error) : error.message || "Varukorgen kunde inte uppdateras.");
       throw error;
     }).finally(() => setCartUpdatesPending((count) => Math.max(0, count - 1)));
     cartUpdateQueue.current = task.catch(() => undefined);

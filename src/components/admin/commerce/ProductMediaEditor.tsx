@@ -27,6 +27,7 @@ type PersistedProps = {
   productId: string;
   productName: string;
   media: ProductMedia[];
+  optionValues?: Array<{ id: string; label: string; swatch: string | null }>;
   onChanged: () => Promise<void>;
 };
 
@@ -66,7 +67,7 @@ function AddImagesTarget({ onFiles, disabled = false }: { onFiles: (files: File[
     onDrop={(event) => { event.preventDefault(); if (!disabled) accept(event.dataTransfer.files); }}
     data-testid="product-image-dropzone"
   >
-    <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/avif" multiple capture="environment" className="sr-only" onChange={(event) => accept(event.target.files)} disabled={disabled} data-testid="product-image-input" />
+    <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/avif" multiple className="sr-only" onChange={(event) => accept(event.target.files)} disabled={disabled} data-testid="product-image-input" />
     <ImagePlus className="mx-auto h-7 w-7" style={{ color: ax("electricSoft") }} />
     <p className="mt-2 text-sm font-black text-white">Lägg till bilder</p>
     <p className="mt-1 text-[11px]" style={{ color: ax("muted") }}>Välj filer, kamera eller dra hit · max 8 MB per bild</p>
@@ -124,12 +125,13 @@ export async function uploadPendingProductMedia(venueId: string, productId: stri
   return apiPostForm<{ media: ProductMedia[]; image_url: string | null }>("api-admin", "product-media", form);
 }
 
-export function ProductMediaEditor({ venueId, productId, productName, media, onChanged }: PersistedProps) {
+export function ProductMediaEditor({ venueId, productId, productName, media, optionValues = [], onChanged }: PersistedProps) {
   const [localMedia, setLocalMedia] = useState(media);
   useEffect(() => setLocalMedia(media), [media]);
   const ordered = [...localMedia].sort((left, right) => left.sort_order - right.sort_order || left.id.localeCompare(right.id));
   const [busy, setBusy] = useState(false);
   const [altDrafts, setAltDrafts] = useState<Record<string, string>>({});
+  const [uploadScope, setUploadScope] = useState("");
   const coverId = ordered.find((item) => item.is_cover)?.id || ordered[0]?.id;
 
   const run = async (work: () => Promise<unknown>, success: string) => {
@@ -150,6 +152,7 @@ export function ProductMediaEditor({ venueId, productId, productName, media, onC
     catch (error) { toast.error(error instanceof Error ? error.message : "Bilderna kunde inte läggas till"); return; }
     const form = new FormData();
     form.set("venueId", venueId); form.set("productId", productId);
+    if (uploadScope) form.set("optionValueId", uploadScope);
     files.forEach((file, index) => { form.append("files", file); form.set(`alt_${index}`, `${productName} ${ordered.length + index + 1}`); });
     void run(() => apiPostForm("api-admin", "product-media", form), files.length === 1 ? "Bilden lades till" : `${files.length} bilder lades till`);
   };
@@ -158,12 +161,18 @@ export function ProductMediaEditor({ venueId, productId, productName, media, onC
 
   return <section className="space-y-3 rounded-2xl p-4" style={{ background: ax("surfaceHi"), border: `1px solid ${ax("borderSoft")}` }} data-testid="product-media-editor">
     <div><h3 className="text-sm font-black text-white">Produktbilder</h3><p className="mt-1 text-xs" style={{ color: ax("muted") }}>Privat lagring, publicerad läsning. Omslaget fortsätter även som produktens bakåtkompatibla bild.</p></div>
+    {optionValues.length ? <label className="block text-[11px] font-bold" style={{ color: ax("muted") }}>Nya bilder visar
+      <select value={uploadScope} onChange={(event) => setUploadScope(event.target.value)} className="mt-1 w-full rounded-xl border bg-transparent px-3 py-2.5 text-sm text-white" style={{ borderColor: ax("border") }}>
+        <option value="">Alla färger</option>
+        {optionValues.map((value) => <option key={value.id} value={value.id}>{value.label}</option>)}
+      </select>
+    </label> : null}
     <AddImagesTarget onFiles={upload} disabled={busy || ordered.length >= MAX_PRODUCT_IMAGES} />
     {busy ? <div className="flex items-center gap-2 text-xs" style={{ color: ax("muted") }}><Loader2 className="h-4 w-4 animate-spin" /> Sparar bilder…</div> : null}
     {ordered.length ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
       {ordered.map((item, index) => <article key={item.id} draggable={!busy} onDragStart={(event) => event.dataTransfer.setData("text/product-media-index", String(index))} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); reorder(Number(event.dataTransfer.getData("text/product-media-index")), index); }} className="overflow-hidden rounded-xl border border-white/10 bg-black/20" data-testid={`product-media-${item.id}`}>
         <div className="relative aspect-square"><img src={item.url} alt={item.alt_text || productName} className="h-full w-full object-cover" />{item.id === coverId ? <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/75 px-2 py-1 text-[9px] font-black text-white"><Star className="h-3 w-3 fill-current" /> OMSLAG</span> : null}<GripVertical className="absolute right-2 top-2 h-4 w-4 rounded bg-black/60 text-white" /></div>
-        <div className="space-y-2 p-2"><input aria-label={`Alt-text bild ${index + 1}`} value={altDrafts[item.id] ?? item.alt_text ?? ""} onChange={(event) => setAltDrafts((current) => ({ ...current, [item.id]: event.target.value }))} onBlur={() => { const value = altDrafts[item.id]; if (value !== undefined && value !== (item.alt_text || "")) void run(() => apiPatch("api-admin", "product-media", { venueId, product_id: productId, action: "alt", media_id: item.id, alt_text: value }), "Alt-text sparades"); }} placeholder="Beskriv bilden" className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-2 text-[10px] text-white" /><div className="flex justify-between"><div className="flex gap-1"><button type="button" disabled={busy || index === 0} onClick={() => reorder(index, index - 1)} className={THUMBNAIL_BUTTON} aria-label={`Flytta bild ${index + 1} vänster`}><ArrowLeft className="h-4 w-4" /></button><button type="button" disabled={busy || index === ordered.length - 1} onClick={() => reorder(index, index + 1)} className={THUMBNAIL_BUTTON} aria-label={`Flytta bild ${index + 1} höger`}><ArrowRight className="h-4 w-4" /></button></div><div className="flex gap-1">{item.id !== coverId ? <button type="button" disabled={busy} onClick={() => void persistOrder(ordered, item.id)} className={THUMBNAIL_BUTTON} aria-label={`Välj bild ${index + 1} som omslag`}><Star className="h-4 w-4" /></button> : <span className={`${THUMBNAIL_BUTTON} border-emerald-400/40 text-emerald-300`} aria-label="Valt omslag"><Check className="h-4 w-4" /></span>}<button type="button" disabled={busy} onClick={() => void run(() => apiPatch("api-admin", "product-media", { venueId, product_id: productId, action: "archive", media_id: item.id }), "Bilden togs bort från produkten") } className={THUMBNAIL_BUTTON} aria-label={`Ta bort bild ${index + 1}`}><Trash2 className="h-4 w-4" /></button></div></div></div>
+        <div className="space-y-2 p-2"><input aria-label={`Alt-text bild ${index + 1}`} value={altDrafts[item.id] ?? item.alt_text ?? ""} onChange={(event) => setAltDrafts((current) => ({ ...current, [item.id]: event.target.value }))} onBlur={() => { const value = altDrafts[item.id]; if (value !== undefined && value !== (item.alt_text || "")) void run(() => apiPatch("api-admin", "product-media", { venueId, product_id: productId, action: "alt", media_id: item.id, alt_text: value }), "Alt-text sparades"); }} placeholder="Beskriv bilden" className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-2 text-[10px] text-white" />{optionValues.length ? <select aria-label={`Färgkoppling bild ${index + 1}`} value={item.option_value_id || ""} onChange={(event) => void run(() => apiPatch("api-admin", "product-media", { venueId, product_id: productId, action: "scope", media_id: item.id, option_value_id: event.target.value || null }), "Bildens färgkoppling sparades")} disabled={busy} className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-2 text-[10px] text-white"><option value="">Alla färger</option>{optionValues.map((value) => <option key={value.id} value={value.id}>{value.label}</option>)}</select> : null}<div className="flex justify-between"><div className="flex gap-1"><button type="button" disabled={busy || index === 0} onClick={() => reorder(index, index - 1)} className={THUMBNAIL_BUTTON} aria-label={`Flytta bild ${index + 1} vänster`}><ArrowLeft className="h-4 w-4" /></button><button type="button" disabled={busy || index === ordered.length - 1} onClick={() => reorder(index, index + 1)} className={THUMBNAIL_BUTTON} aria-label={`Flytta bild ${index + 1} höger`}><ArrowRight className="h-4 w-4" /></button></div><div className="flex gap-1">{item.id !== coverId ? <button type="button" disabled={busy} onClick={() => void persistOrder(ordered, item.id)} className={THUMBNAIL_BUTTON} aria-label={`Välj bild ${index + 1} som omslag`}><Star className="h-4 w-4" /></button> : <span className={`${THUMBNAIL_BUTTON} border-emerald-400/40 text-emerald-300`} aria-label="Valt omslag"><Check className="h-4 w-4" /></span>}<button type="button" disabled={busy} onClick={() => void run(() => apiPatch("api-admin", "product-media", { venueId, product_id: productId, action: "archive", media_id: item.id }), "Bilden togs bort från produkten") } className={THUMBNAIL_BUTTON} aria-label={`Ta bort bild ${index + 1}`}><Trash2 className="h-4 w-4" /></button></div></div></div>
       </article>)}
     </div> : <p className="rounded-xl border border-white/10 p-4 text-center text-xs" style={{ color: ax("muted") }}>Ingen produktbild ännu.</p>}
   </section>;

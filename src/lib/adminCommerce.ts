@@ -25,7 +25,30 @@ export type ProductMedia = {
   alt_text: string | null;
   sort_order: number;
   is_cover: boolean;
+  option_value_id?: string | null;
   status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProductPresentation = {
+  id: string;
+  product_id: string;
+  venue_id: string;
+  locale: "sv-SE" | "en-SE";
+  slug: string;
+  short_description: string | null;
+  long_description: string | null;
+  material: string | null;
+  fit: string | null;
+  care: string | null;
+  returns_policy: string | null;
+  size_guide: { body?: string; columns?: string[]; rows?: Array<{ label?: string; values?: string[] }> };
+  seo_title: string | null;
+  seo_description: string | null;
+  publication_state: "draft" | "published" | "archived";
+  low_stock_threshold: number;
+  published_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -52,6 +75,8 @@ export type AdminCommerceProduct = {
   sport: string | null;
   image_url: string | null;
   media?: ProductMedia[];
+  presentation?: ProductPresentation | null;
+  presentations?: ProductPresentation[];
   venue_commerce_enabled?: boolean;
   store_eligible?: boolean;
   activity_addon_eligible?: boolean;

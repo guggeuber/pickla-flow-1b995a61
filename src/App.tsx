@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -92,6 +92,8 @@ import { notifyFrontendRouteChange } from "@/lib/frontendVersionCoordinator";
 import { syncPwaSurfaceMetadata } from "@/lib/pwaSurface";
 import { StageEnvironmentMarker } from "@/components/StageEnvironmentMarker";
 
+const CommerceProductPage = lazy(() => import("./pages/CommerceProductPage"));
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: shouldRetryQuery },
@@ -133,6 +135,7 @@ function AppRoutes() {
             <Route path="/invest/memo/:token" element={<InvestMemoPage />} />
             <Route path="/pulse/:token" element={<PulsePage />} />
             <Route path="/shop" element={<CommerceShopPage />} />
+            <Route path="/shop/products/:slug" element={<Suspense fallback={<div className="min-h-[100dvh] bg-[#fbfaf7]" />}><CommerceProductPage /></Suspense>} />
             <Route path="/course/:seriesId" element={<CourseSeriesPage />} />
             <Route path="/seriespel" element={<LeagueDiscoveryPage />} />
             <Route path="/seriespel/:seriesId" element={<LeaguePage />} />

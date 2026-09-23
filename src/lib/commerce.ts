@@ -23,6 +23,8 @@ export interface CommerceProduct {
   sport: string | null;
   image_url: string | null;
   media?: CommerceProductMedia[];
+  presentation?: CommerceProductPresentation | null;
+  pricing?: CommerceResolvedPrice;
   store_eligible?: boolean;
   resolver_rules?: Record<string, unknown> | null;
   max_quantity?: number;
@@ -43,6 +45,42 @@ export interface CommerceProductMedia {
   alt_text: string | null;
   sort_order: number;
   is_cover: boolean;
+  option_value_id?: string | null;
+}
+
+export type CommerceSizeGuide = {
+  body?: string;
+  columns?: string[];
+  rows?: Array<{ label?: string; values?: string[] } | string[]>;
+};
+
+export interface CommerceProductPresentation {
+  id: string;
+  product_id: string;
+  locale: "sv-SE" | "en-SE";
+  slug: string;
+  short_description: string | null;
+  long_description: string | null;
+  material: string | null;
+  fit: string | null;
+  care: string | null;
+  returns_policy: string | null;
+  size_guide: CommerceSizeGuide;
+  seo_title: string | null;
+  seo_description: string | null;
+  publication_state: "draft" | "published" | "archived";
+  low_stock_threshold: number;
+  published_at: string | null;
+}
+
+export interface CommerceResolvedPrice {
+  public_price_minor: number;
+  resolved_price_minor: number;
+  discount_minor: number;
+  pricing_source: "product_base_price" | "variant_price_override" | "membership_tier_pricing";
+  membership_id: string | null;
+  membership_tier_id: string | null;
+  membership_tier_name: string | null;
 }
 
 export interface CommerceVariantOption {
@@ -66,6 +104,7 @@ export interface CommerceVariant {
   options: CommerceVariantOption[];
   available_to_sell: number;
   sold_out: boolean;
+  pricing?: CommerceResolvedPrice;
 }
 
 export function commerceProductMaxQuantity(product: Pick<CommerceProduct, "max_quantity" | "resolver_rules">) {
@@ -351,13 +390,13 @@ export interface StaffCommerceOrderDetail {
     pickup_block_reason: string | null;
     activity?: { id: string; name: string; session_type?: string | null; start_time?: string | null; end_time?: string | null } | null;
   }>;
-  receipt: Record<string, any> | null;
-  receipt_lines: Array<Record<string, any>>;
-  ledger_entries: Array<Record<string, any>>;
-  refunds: Array<Record<string, any>>;
-  allocations: Array<Record<string, any>>;
-  pickup_commands: Array<Record<string, any>>;
-  audit_events: Array<Record<string, any>>;
+  receipt: Record<string, unknown> | null;
+  receipt_lines: Array<Record<string, unknown>>;
+  ledger_entries: Array<Record<string, unknown>>;
+  refunds: Array<Record<string, unknown>>;
+  allocations: Array<Record<string, unknown>>;
+  pickup_commands: Array<Record<string, unknown>>;
+  audit_events: Array<Record<string, unknown>>;
   history: Array<{
     id: string;
     occurred_at: string;
@@ -423,13 +462,13 @@ export function collectCommercePickup(input: {
   });
 }
 
-export function fetchCommerceCatalog(venueId: string) {
+export function fetchCommerceCatalog(venueId: string, locale: "sv-SE" | "en-SE" = "sv-SE") {
   return apiGet<{
     commerce_available: boolean;
     message: string | null;
     products: CommerceProduct[];
     relationships: CommerceRelationship[];
-  }>("api-commerce", "catalog", { venueId });
+  }>("api-commerce", "catalog", { venueId, locale });
 }
 
 export function createCommerceCart(input: {

@@ -80,7 +80,29 @@ type ProductMediaRow = {
   alt_text: string | null;
   sort_order: number;
   is_cover: boolean;
+  option_value_id: string | null;
   status: 'active' | 'archived';
+  created_at: string;
+  updated_at: string;
+};
+type StorefrontPresentationRow = {
+  id: string;
+  product_id: string;
+  venue_id: string;
+  locale: string;
+  slug: string;
+  short_description: string | null;
+  long_description: string | null;
+  material: string | null;
+  fit: string | null;
+  care: string | null;
+  returns_policy: string | null;
+  size_guide: Record<string, unknown>;
+  seo_title: string | null;
+  seo_description: string | null;
+  publication_state: 'draft' | 'published' | 'archived';
+  low_stock_threshold: number;
+  published_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -107,6 +129,7 @@ function adminEntityTableForPath(path: string) {
     hours: 'opening_hours',
     pricing: 'pricing_rules',
     products: 'access_products',
+    'product-presentation': 'commerce_product_presentations',
     'product-media': 'product_media',
     'tracked-product-setup': 'product_venue_listings',
     'product-variants': 'product_variants',
@@ -138,6 +161,7 @@ function adminEntityIdFromRequest(path: string, method: string, body: Record<str
   if (path === 'hours') return body.dayOfWeek || body.day_of_week || null;
   if (path === 'pricing') return body.ruleId || url.searchParams.get('ruleId');
   if (path === 'products') return body.productId || body.product_key || url.searchParams.get('productId');
+  if (path === 'product-presentation') return body.product_id || body.productId || null;
   if (path === 'product-media') return body.media_id || body.product_id || body.productId || null;
   if (path === 'tracked-product-setup') return body.product_id || null;
   if (path === 'product-variants') return body.variant_id || body.product_id || url.searchParams.get('productId');
@@ -4052,7 +4076,7 @@ async function analyzeOperationImpact(
 
 async function decorateAdminProducts(admin: any, venueId: string, products: any[]) {
   const productIds = products.map((product) => product.id);
-  const [{ data: venue, error: venueError }, { data: relationships, error: relationshipsError }, variantResult, listingResult, mediaResult] = await Promise.all([
+  const [{ data: venue, error: venueError }, { data: relationships, error: relationshipsError }, variantResult, listingResult, mediaResult, presentationResult] = await Promise.all([
     admin.from('venues').select('slug, commerce_enabled, tracked_merch_sales_enabled').eq('id', venueId).maybeSingle(),
     admin.from('product_relationships').select('target_product_id').eq('venue_id', venueId).eq('is_active', true),
     productIds.length
@@ -4065,8 +4089,13 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
       : Promise.resolve({ data: [], error: null }),
     productIds.length
       ? admin.from('product_media')
-        .select('id, product_id, venue_id, storage_bucket, storage_path, public_url, alt_text, sort_order, is_cover, status, created_at, updated_at')
+        .select('id, product_id, venue_id, storage_bucket, storage_path, public_url, alt_text, sort_order, is_cover, option_value_id, status, created_at, updated_at')
         .eq('venue_id', venueId).in('product_id', productIds).eq('status', 'active').order('sort_order').order('id')
+      : Promise.resolve({ data: [], error: null }),
+    productIds.length
+      ? admin.from('commerce_product_presentations')
+        .select('id, product_id, venue_id, locale, slug, short_description, long_description, material, fit, care, returns_policy, size_guide, seo_title, seo_description, publication_state, low_stock_threshold, published_at, created_at, updated_at')
+        .eq('venue_id', venueId).in('product_id', productIds).order('locale')
       : Promise.resolve({ data: [], error: null }),
   ]);
   if (venueError) throw new Error(venueError.message);
@@ -4074,9 +4103,11 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
   if (variantResult.error) throw new Error(variantResult.error.message);
   if (listingResult.error) throw new Error(listingResult.error.message);
   if (mediaResult.error) throw new Error(mediaResult.error.message);
+  if (presentationResult.error) throw new Error(presentationResult.error.message);
   const variants = variantResult.data || [];
   const listings = listingResult.data || [];
   const mediaRows = (mediaResult.data || []) as ProductMediaRow[];
+  const presentationRows = (presentationResult.data || []) as StorefrontPresentationRow[];
   const resolvedMedia = await Promise.all(mediaRows.map(async (media) => {
     if (media.storage_bucket === 'legacy-external') return { ...media, url: media.public_url };
     const { data, error } = await admin.storage.from(media.storage_bucket).createSignedUrl(media.storage_path, 3600);
@@ -4097,6 +4128,10 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
   return products.map((product) => {
     const productVariants = variants.filter((variant: any) => variant.product_id === product.id);
     const productMedia = resolvedMedia.filter((media) => media.product_id === product.id);
+    const productPresentations = presentationRows.filter((presentation) => presentation.product_id === product.id);
+    const storefrontPresentation = productPresentations.find((presentation) => presentation.locale === 'sv-SE')
+      || productPresentations[0]
+      || null;
     const coverMedia = productMedia.find((media) => media.is_cover) || productMedia[0] || null;
     const listing = listings.find((candidate: any) => candidate.product_id === product.id) || null;
     const productVariantIds = new Set(productVariants.map((variant: any) => variant.id));
@@ -4155,6 +4190,8 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
       ...product,
       image_url: coverMedia?.url || product.image_url || null,
       media: productMedia,
+      presentation: storefrontPresentation,
+      presentations: productPresentations,
       venue_commerce_enabled: venueCommerceEnabled,
       store_eligible: effectiveStoreEligible,
       activity_addon_eligible: addon.eligible,
@@ -4164,7 +4201,11 @@ async function decorateAdminProducts(admin: any, venueId: string, products: any[
         : product.status === 'active' && relevantFailure
           ? relevantFailure?.message || 'Produkten är inte öppen för försäljning.'
           : null,
-      store_path: effectiveStoreEligible && venue?.slug ? `/shop?v=${encodeURIComponent(venue.slug)}` : null,
+      store_path: effectiveStoreEligible && venue?.slug
+        ? storefrontPresentation?.publication_state === 'published'
+          ? `/shop/products/${encodeURIComponent(storefrontPresentation.slug)}?v=${encodeURIComponent(venue.slug)}`
+          : `/shop?v=${encodeURIComponent(venue.slug)}`
+        : null,
       variant_count: productVariants.length,
       active_variant_count: productVariants.filter((variant: any) => variant.status === 'active').length,
       listing: listing ? {
@@ -6640,11 +6681,75 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (req.method === 'PUT' && path === 'product-presentation') {
+      const body = await req.json();
+      const productId = String(body.product_id || body.productId || '').trim();
+      const locale = String(body.locale || 'sv-SE').trim();
+      const slug = String(body.slug || '').trim().toLowerCase();
+      const publicationState = String(body.publication_state || 'draft').trim();
+      if (!CAPACITY_UUID.test(productId)) return errorResponse('Invalid productId', 400);
+      if (!['sv-SE', 'en-SE'].includes(locale)) return errorResponse('Unsupported Storefront locale', 400);
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length < 2 || slug.length > 120) {
+        return errorResponse('Slug must use lowercase letters, numbers and hyphens', 400);
+      }
+      if (!['draft', 'published', 'archived'].includes(publicationState)) {
+        return errorResponse('Invalid Storefront publication state', 400);
+      }
+      const { data: product, error: productError } = await admin.from('access_products')
+        .select('id').eq('id', productId).eq('venue_id', venueId).maybeSingle();
+      if (productError) return errorResponse(productError.message);
+      if (!product) return errorResponse('Product not found', 404);
+
+      const text = (value: unknown, maximum: number) => {
+        const normalized = String(value || '').trim();
+        return normalized ? normalized.slice(0, maximum) : null;
+      };
+      const rawSizeGuide = body.size_guide && typeof body.size_guide === 'object' && !Array.isArray(body.size_guide)
+        ? body.size_guide
+        : { body: '', rows: [] };
+      if (JSON.stringify(rawSizeGuide).length > 20_000) return errorResponse('Size guide is too large', 400);
+      const lowStockThreshold = Math.max(0, Math.min(100, Math.floor(Number(body.low_stock_threshold ?? 3))));
+      const presentationUpdates = {
+        product_id: productId,
+        venue_id: venueId,
+        locale,
+        slug,
+        short_description: text(body.short_description, 320),
+        long_description: text(body.long_description, 8_000),
+        material: text(body.material, 2_000),
+        fit: text(body.fit, 2_000),
+        care: text(body.care, 2_000),
+        returns_policy: text(body.returns_policy, 2_000),
+        size_guide: rawSizeGuide,
+        seo_title: text(body.seo_title, 120),
+        seo_description: text(body.seo_description, 320),
+        publication_state: publicationState,
+        low_stock_threshold: lowStockThreshold,
+        updated_by: userId,
+      };
+      const { data: existingPresentation, error: existingPresentationError } = await admin
+        .from('commerce_product_presentations')
+        .select('id')
+        .eq('product_id', productId)
+        .eq('locale', locale)
+        .maybeSingle();
+      if (existingPresentationError) return errorResponse(existingPresentationError.message);
+      const { data, error } = existingPresentation
+        ? await admin.from('commerce_product_presentations')
+          .update(presentationUpdates).eq('id', existingPresentation.id).select().single()
+        : await admin.from('commerce_product_presentations')
+          .insert({ ...presentationUpdates, created_by: userId }).select().single();
+      if (error) return errorResponse(error.message, error.code === '23505' ? 409 : 400);
+      return jsonResponse(data);
+    }
+
     if (req.method === 'POST' && path === 'product-media') {
       const form = await req.formData();
       const productId = String(form.get('productId') || form.get('product_id') || '').trim();
+      const optionValueId = String(form.get('optionValueId') || form.get('option_value_id') || '').trim() || null;
       const files = form.getAll('files').filter((value): value is File => value instanceof File);
       if (!CAPACITY_UUID.test(productId)) return errorResponse('Invalid productId', 400);
+      if (optionValueId && !CAPACITY_UUID.test(optionValueId)) return errorResponse('Invalid optionValueId', 400);
       if (files.length === 0 || files.length > PRODUCT_MEDIA_MAX_FILES) {
         return errorResponse(`Upload 1-${PRODUCT_MEDIA_MAX_FILES} images`, 400);
       }
@@ -6687,6 +6792,12 @@ Deno.serve(async (req) => {
           });
           if (insertError) throw new Error(insertError.message);
           item.inserted = true;
+          if (optionValueId) {
+            const { error: scopeError } = await admin.from('product_media')
+              .update({ option_value_id: optionValueId })
+              .eq('id', mediaId).eq('product_id', productId).eq('venue_id', venueId);
+            if (scopeError) throw new Error(scopeError.message);
+          }
         }
         return jsonResponse(await adminProductMediaPayload(admin, venueId, productId), 201);
       } catch (error) {
@@ -6735,6 +6846,20 @@ Deno.serve(async (req) => {
           .eq('id', mediaId).eq('product_id', productId).eq('venue_id', venueId).eq('status', 'active')
           .select('id').maybeSingle();
         if (error) return errorResponse(error.message);
+        if (!data) return errorResponse('Product media not found', 404);
+      } else if (action === 'scope') {
+        const mediaId = String(body.media_id || '').trim();
+        const optionValueId = body.option_value_id == null || body.option_value_id === ''
+          ? null
+          : String(body.option_value_id).trim();
+        if (!CAPACITY_UUID.test(mediaId) || (optionValueId && !CAPACITY_UUID.test(optionValueId))) {
+          return errorResponse('Invalid product media scope', 400);
+        }
+        const { data, error } = await admin.from('product_media')
+          .update({ option_value_id: optionValueId })
+          .eq('id', mediaId).eq('product_id', productId).eq('venue_id', venueId).eq('status', 'active')
+          .select('id').maybeSingle();
+        if (error) return errorResponse(error.message, 409);
         if (!data) return errorResponse('Product media not found', 404);
       } else {
         return errorResponse('Unsupported product media action', 400);

@@ -40,6 +40,10 @@ import {
   visibleOfferedWithRelationships,
   type OfferedWithRelationship,
 } from '../_shared/product_relationships.ts';
+import {
+  loadCommerceProductPricingContext,
+  resolveCommerceProductPrice,
+} from '../_shared/commerce_product_pricing.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const CART_TOKEN_BYTES = 32;
@@ -90,11 +94,35 @@ type CommerceProduct = CommerceProductLike & {
 
 type CommerceProductMedia = {
   id: string;
-  product_id: string;
-  public_url: string;
+  url: string;
   alt_text: string | null;
   sort_order: number;
   is_cover: boolean;
+  option_value_id: string | null;
+};
+
+type CommerceProductMediaSource = Omit<CommerceProductMedia, 'url'> & {
+  product_id: string;
+  public_url: string;
+};
+
+type StorefrontPresentationRow = {
+  id: string;
+  product_id: string;
+  locale: string;
+  slug: string;
+  short_description: string | null;
+  long_description: string | null;
+  material: string | null;
+  fit: string | null;
+  care: string | null;
+  returns_policy: string | null;
+  size_guide: Record<string, unknown>;
+  seo_title: string | null;
+  seo_description: string | null;
+  publication_state: 'draft' | 'published' | 'archived';
+  low_stock_threshold: number;
+  published_at: string | null;
 };
 
 type RpcVersionRow = {
@@ -331,13 +359,21 @@ function newCartToken() {
   return base64Url(bytes);
 }
 
-const CLIENT_COMMERCE_EVENTS = new Set(['activity_sheet_opened', 'logged_out_cta_clicked']);
+const CLIENT_COMMERCE_EVENTS = new Set([
+  'activity_sheet_opened',
+  'logged_out_cta_clicked',
+  'product_view',
+  'variant_selected',
+  'add_to_cart',
+]);
+const STOREFRONT_COMMERCE_EVENTS = new Set(['product_view', 'variant_selected', 'add_to_cart']);
 
 async function recordCommerceEvent(admin: AdminClient, input: {
   eventName: string;
   venueId?: string | null;
   orderId?: string | null;
   activitySessionId?: string | null;
+  productId?: string | null;
   journeyId?: string | null;
   journeyHash?: string | null;
   durationMs?: number | null;
@@ -345,13 +381,14 @@ async function recordCommerceEvent(admin: AdminClient, input: {
 }) {
   const journey = String(input.journeyId || '').trim().slice(0, 120);
   const safeMetadata = Object.fromEntries(Object.entries(input.metadata || {}).filter(([key, value]) => (
-    ['source', 'authenticated', 'within_7d', 'within_30d', 'outcome'].includes(key)
+    ['source', 'authenticated', 'within_7d', 'within_30d', 'outcome', 'variant_id', 'option_code', 'value_code'].includes(key)
     && ['string', 'number', 'boolean'].includes(typeof value)
   )));
   const { error } = await admin.from('commerce_events').insert({
     venue_id: input.venueId || null,
     commerce_order_id: input.orderId || null,
     activity_session_id: input.activitySessionId || null,
+    product_id: input.productId || null,
     event_name: input.eventName,
     journey_id_hash: input.journeyHash || (journey ? await sha256(journey) : null),
     duration_ms: input.durationMs == null ? null : Math.max(0, Math.floor(input.durationMs)),
@@ -1334,6 +1371,12 @@ async function resolveLines(
   );
   const venue = await venueContext(admin, order.venue_id);
   const customerId = resolvedCustomerId ?? (userId ? await resolveCustomerIdForUser(admin, userId) : order.customer_id || null);
+  const productPricingContext = await loadCommerceProductPricingContext({
+    client: admin,
+    venueId: order.venue_id,
+    userId,
+    customerId,
+  });
   const lineById = new Map(lines.map((line) => [line.id, line]));
   const trackedVariantIds = Array.from(new Set(lines
     .filter((line) => line.inventory_policy === 'tracked')
@@ -1414,10 +1457,27 @@ async function resolveLines(
     let unitPriceMinor = tracked && variant.price_override_minor !== null
       ? Number(variant.price_override_minor)
       : Math.round(Number(product.base_price_sek || 0) * 100);
+    let discountMinor = 0;
     let resolverSnapshot: Record<string, unknown> = {
       pricing_source: tracked && variant.price_override_minor !== null ? 'variant_price_override' : 'product_base_price',
       ...(tracked ? { variant_id: variant.id, sku: variant.sku, listing_id: listing.id } : {}),
     };
+    if (line.commerce_kind !== 'participation') {
+      const productPrice = resolveCommerceProductPrice({
+        context: productPricingContext,
+        productKey: product.product_key,
+        publicPriceMinor: unitPriceMinor,
+        publicSource: tracked && variant.price_override_minor !== null
+          ? 'variant_price_override'
+          : 'product_base_price',
+      });
+      discountMinor = productPrice.discount_minor * Number(line.quantity || 1);
+      resolverSnapshot = {
+        ...resolverSnapshot,
+        ...productPrice,
+        final_price_minor: productPrice.resolved_price_minor,
+      };
+    }
     if (line.commerce_kind === 'participation') {
       let purchaseKind: 'activity_ticket' | 'day_pass' | 'course' | 'league_team' = product.product_key === 'day_access' || product.product_kind === 'day_access'
         ? 'day_pass'
@@ -1606,7 +1666,7 @@ async function resolveLines(
         listing_id: listing.id,
       } : {},
       unit_price_minor: unitPriceMinor,
-      discount_minor: 0,
+      discount_minor: discountMinor,
       vat_rate: Number(product.vat_rate || 0),
       beneficiary_user_id: line.commerce_kind === 'participation'
         ? line.activity_series_id ? line.beneficiary_user_id || null : userId || null
@@ -2385,6 +2445,9 @@ const commerceHandler = async (req: Request) => {
 
     if (req.method === 'GET' && path === 'product-media') {
       const mediaId = String(url.searchParams.get('id') || '').trim();
+      const requestedWidth = Number(url.searchParams.get('width') || 0);
+      const allowedWidths = new Set([320, 480, 640, 720, 960, 1280, 1600]);
+      const width = allowedWidths.has(requestedWidth) ? requestedWidth : null;
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(mediaId)) {
         return errorResponse('Invalid media id', 400);
       }
@@ -2397,14 +2460,35 @@ const commerceHandler = async (req: Request) => {
         .select('id').eq('id', media.product_id).eq('status', 'active').eq('is_active', true).maybeSingle();
       if (productError) throw new Error(productError.message);
       if (!product) return errorResponse('Product image not found', 404);
-      const { data: image, error: imageError } = await admin.storage.from(media.storage_bucket).download(media.storage_path);
+      const { data: presentations, error: presentationError } = await admin
+        .from('commerce_product_presentations')
+        .select('publication_state')
+        .eq('product_id', media.product_id);
+      if (presentationError) throw new Error(presentationError.message);
+      const publicationRows = (presentations || []) as Array<Pick<StorefrontPresentationRow, 'publication_state'>>;
+      if (publicationRows.length > 0 && !publicationRows.some((item) => item.publication_state === 'published')) {
+        return errorResponse('Product image not found', 404);
+      }
+      let { data: image, error: imageError } = width
+        ? await admin.storage.from(media.storage_bucket).download(media.storage_path, {
+          transform: { width, quality: 82, resize: 'contain' },
+        })
+        : await admin.storage.from(media.storage_bucket).download(media.storage_path);
+      // Local or lower-tier Storage may not expose image transformations. The
+      // canonical object remains available without turning media delivery into
+      // a publication failure.
+      if ((imageError || !image) && width) {
+        const fallback = await admin.storage.from(media.storage_bucket).download(media.storage_path);
+        image = fallback.data;
+        imageError = fallback.error;
+      }
       if (imageError || !image) return errorResponse('Product image unavailable', 404);
       return new Response(image, {
         status: 200,
         headers: {
           ...corsHeaders,
           'Content-Type': image.type || 'application/octet-stream',
-          'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
+          'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
           'X-Content-Type-Options': 'nosniff',
         },
       });
@@ -2413,6 +2497,8 @@ const commerceHandler = async (req: Request) => {
     if (req.method === 'GET' && path === 'catalog') {
       const venueId = url.searchParams.get('venueId') || '';
       if (!venueId) return errorResponse('Missing venueId', 400);
+      const requestedLocale = String(url.searchParams.get('locale') || 'sv-SE');
+      const locale = /^[a-z]{2}-[A-Z]{2}$/.test(requestedLocale) ? requestedLocale : 'sv-SE';
       const [venue, { data: homeProducts, error: homeProductError }, { data: listings, error: listingError }, { data: relationships, error: relationshipError }] = await Promise.all([
         venueContext(admin, venueId),
         admin.from('access_products')
@@ -2444,6 +2530,7 @@ const commerceHandler = async (req: Request) => {
       const productRows = Array.from(new Map(
         [...(homeProducts || []), ...(listedProducts || [])].map((product: any) => [String(product.id), product]),
       ).values()) as CommerceProduct[];
+      const productById = new Map(productRows.map((product) => [product.id, product]));
       const trackedProductIds = productRows.filter((product) => product.inventory_policy === 'tracked').map((product) => product.id);
       const { data: variants, error: variantError } = trackedProductIds.length
         ? await admin.from('product_variants')
@@ -2453,30 +2540,45 @@ const commerceHandler = async (req: Request) => {
       if (variantError) throw new Error(variantError.message);
       const variantIds = (variants || []).map((variant: any) => String(variant.id));
       const locationIds = (listings || []).map((listing: any) => String(listing.default_inventory_location_id));
-      const [{ data: assignments, error: assignmentError }, { data: optionValues, error: optionValueError }, { data: options, error: optionError }, { data: levels, error: levelError }, { data: locations, error: locationError }, { data: media, error: mediaError }] = await Promise.all([
+      const [{ data: assignments, error: assignmentError }, { data: optionValues, error: optionValueError }, { data: options, error: optionError }, { data: levels, error: levelError }, { data: locations, error: locationError }, { data: media, error: mediaError }, { data: presentations, error: presentationError }, productPricingContext] = await Promise.all([
         variantIds.length ? admin.from('product_variant_option_values').select('*').in('variant_id', variantIds) : Promise.resolve({ data: [], error: null }),
         trackedProductIds.length ? admin.from('product_option_values').select('id, option_id, code, label, swatch, sort_order, status').eq('status', 'active') : Promise.resolve({ data: [], error: null }),
         trackedProductIds.length ? admin.from('product_options').select('id, product_id, code, label, sort_order, status').in('product_id', trackedProductIds).eq('status', 'active') : Promise.resolve({ data: [], error: null }),
         variantIds.length && locationIds.length ? admin.from('inventory_levels').select('variant_id, location_id, on_hand, reserved, allocated, incident_blocked').in('variant_id', variantIds).in('location_id', locationIds) : Promise.resolve({ data: [], error: null }),
         locationIds.length ? admin.from('inventory_locations').select('id, venue_id, name, status').in('id', locationIds) : Promise.resolve({ data: [], error: null }),
         productRows.length ? admin.from('product_media')
-          .select('id, product_id, public_url, alt_text, sort_order, is_cover')
+          .select('id, product_id, public_url, alt_text, sort_order, is_cover, option_value_id')
           .in('product_id', productRows.map((product) => product.id)).eq('status', 'active').order('sort_order').order('id')
           : Promise.resolve({ data: [], error: null }),
+        productRows.length ? admin.from('commerce_product_presentations')
+          .select('id, product_id, locale, slug, short_description, long_description, material, fit, care, returns_policy, size_guide, seo_title, seo_description, publication_state, low_stock_threshold, published_at')
+          .in('product_id', productRows.map((product) => product.id))
+          : Promise.resolve({ data: [], error: null }),
+        loadCommerceProductPricingContext({ client: admin, venueId, userId }),
       ]);
-      const catalogDetailError = assignmentError || optionValueError || optionError || levelError || locationError || mediaError;
+      const catalogDetailError = assignmentError || optionValueError || optionError || levelError || locationError || mediaError || presentationError;
       if (catalogDetailError) throw new Error(catalogDetailError.message);
       const listingByProduct = new Map((listings || []).map((row: any) => [String(row.product_id), row]));
       const locationById = new Map((locations || []).map((row: any) => [String(row.id), row]));
       const optionById = new Map((options || []).map((row: any) => [String(row.id), row]));
       const valueById = new Map((optionValues || []).map((row: any) => [String(row.id), row]));
       const levelByKey = new Map((levels || []).map((row: any) => [`${row.variant_id}:${row.location_id}`, row]));
+      const presentationRows = (presentations || []) as StorefrontPresentationRow[];
+      const productsWithPresentation = new Set(presentationRows.map((row) => String(row.product_id)));
+      const productsWithPublishedPresentation = new Set(presentationRows
+        .filter((row) => row.publication_state === 'published')
+        .map((row) => String(row.product_id)));
+      const presentationByProduct = new Map(presentationRows
+        .filter((row) => row.locale === locale && row.publication_state === 'published')
+        .map((row) => [String(row.product_id), row]));
       const assignmentsByVariant = new Map<string, any[]>();
       const mediaByProduct = new Map<string, CommerceProductMedia[]>();
-      for (const item of (media || []) as CommerceProductMedia[]) {
-        const list = mediaByProduct.get(String(item.product_id)) || [];
-        list.push({ id: item.id, url: item.public_url, alt_text: item.alt_text, sort_order: item.sort_order, is_cover: item.is_cover });
-        mediaByProduct.set(String(item.product_id), list);
+      for (const item of (media || []) as CommerceProductMediaSource[]) {
+        const productId = String(item.product_id);
+        if (productsWithPresentation.has(productId) && !productsWithPublishedPresentation.has(productId)) continue;
+        const list = mediaByProduct.get(productId) || [];
+        list.push({ id: item.id, url: item.public_url, alt_text: item.alt_text, sort_order: item.sort_order, is_cover: item.is_cover, option_value_id: item.option_value_id });
+        mediaByProduct.set(productId, list);
       }
       for (const assignment of assignments || []) {
         const list = assignmentsByVariant.get(String(assignment.variant_id)) || [];
@@ -2500,7 +2602,17 @@ const commerceHandler = async (req: Request) => {
           }] : [];
         }).sort((left: any, right: any) => Number(left.sort_order) - Number(right.sort_order));
         const list = variantsByProduct.get(String(variant.product_id)) || [];
-        list.push({ ...variant, options: optionFacts, available_to_sell: available, sold_out: available <= 0 });
+        const variantProduct = productById.get(String(variant.product_id));
+        const publicPriceMinor = variant.price_override_minor !== null
+          ? Number(variant.price_override_minor)
+          : Math.round(Number(variantProduct?.base_price_sek || 0) * 100);
+        const pricing = resolveCommerceProductPrice({
+          context: productPricingContext,
+          productKey: String(variantProduct?.product_key || ''),
+          publicPriceMinor,
+          publicSource: variant.price_override_minor !== null ? 'variant_price_override' : 'product_base_price',
+        });
+        list.push({ ...variant, options: optionFacts, available_to_sell: available, sold_out: available <= 0, pricing });
         variantsByProduct.set(String(variant.product_id), list);
       }
       const visibleRelationships = visibleOfferedWithRelationships({
@@ -2537,7 +2649,17 @@ const commerceHandler = async (req: Request) => {
         return store.eligible || addon.eligible;
       }).map((product) => ({
         ...product,
+        image_url: productsWithPresentation.has(product.id) && !productsWithPublishedPresentation.has(product.id)
+          ? null
+          : product.image_url,
         media: mediaByProduct.get(product.id) || [],
+        presentation: presentationByProduct.get(product.id) || null,
+        pricing: resolveCommerceProductPrice({
+          context: productPricingContext,
+          productKey: product.product_key,
+          publicPriceMinor: Math.round(Number(product.base_price_sek || 0) * 100),
+          publicSource: 'product_base_price',
+        }),
         max_quantity: productMaxQuantity(product),
         store_eligible: product.inventory_policy === 'tracked'
           ? Boolean(listingByProduct.get(product.id)?.tracked_sales_enabled) && venue.tracked_merch_sales_enabled === true
@@ -2576,10 +2698,56 @@ const commerceHandler = async (req: Request) => {
       const eventName = String(body.event_name || '').trim();
       const venueId = String(body.venue_id || '').trim();
       const activitySessionId = String(body.activity_session_id || '').trim();
+      const productId = String(body.product_id || '').trim();
       const journeyId = String(body.journey_id || '').trim();
       if (!CLIENT_COMMERCE_EVENTS.has(eventName)) return errorResponse('Unsupported event', 400);
-      if (!venueId || !activitySessionId || journeyId.length < 16) return errorResponse('Invalid event scope', 400);
+      if (!venueId || journeyId.length < 16) return errorResponse('Invalid event scope', 400);
       await venueContext(admin, venueId);
+      if (STOREFRONT_COMMERCE_EVENTS.has(eventName)) {
+        if (!UUID_PATTERN.test(productId)) return errorResponse('Invalid product event scope', 400);
+        const [{ data: product }, { data: presentation }] = await Promise.all([
+          admin.from('access_products').select('id, venue_id').eq('id', productId).eq('status', 'active').eq('is_active', true).maybeSingle(),
+          admin.from('commerce_product_presentations').select('id').eq('product_id', productId).eq('publication_state', 'published').limit(1).maybeSingle(),
+        ]);
+        if (!product || !presentation) return errorResponse('Product not found', 404);
+        if (String(product.venue_id || '') !== venueId) {
+          const { data: listing } = await admin.from('product_venue_listings')
+            .select('id')
+            .eq('product_id', productId)
+            .eq('venue_id', venueId)
+            .eq('status', 'active')
+            .maybeSingle();
+          if (!listing) return errorResponse('Product not found', 404);
+        }
+        const requestedVariantId = String(body.variant_id || '').trim();
+        let validatedVariantId = '';
+        if (requestedVariantId) {
+          if (!UUID_PATTERN.test(requestedVariantId)) return errorResponse('Invalid variant event scope', 400);
+          const { data: variant } = await admin.from('product_variants')
+            .select('id')
+            .eq('id', requestedVariantId)
+            .eq('product_id', productId)
+            .eq('status', 'active')
+            .maybeSingle();
+          if (!variant) return errorResponse('Variant not found', 404);
+          validatedVariantId = variant.id;
+        }
+        await recordCommerceEvent(admin, {
+          eventName,
+          venueId,
+          productId,
+          journeyId,
+          metadata: {
+            authenticated: Boolean(userId),
+            source: String(body.source || 'storefront').slice(0, 60),
+            variant_id: validatedVariantId,
+            option_code: String(body.option_code || '').slice(0, 60),
+            value_code: String(body.value_code || '').slice(0, 60),
+          },
+        });
+        return jsonResponse({ ok: true }, 201, 0);
+      }
+      if (!activitySessionId) return errorResponse('Invalid event scope', 400);
       const { data: activity } = await admin.from('activity_sessions')
         .select('id')
         .eq('id', activitySessionId)
@@ -3428,7 +3596,7 @@ const commerceHandler = async (req: Request) => {
                   name: line.product_name,
                   description: line.variant_snapshot?.options?.map((option: any) => option.value_label).filter(Boolean).join(' / ') || undefined,
                 },
-                unit_amount: Number(line.unit_price_minor),
+                unit_amount: Math.round((Number(line.unit_price_minor) * Number(line.quantity || 1) - Number(line.discount_minor || 0)) / Number(line.quantity || 1)),
                 tax_behavior: 'inclusive',
               },
               quantity: Number(line.quantity || 1),
@@ -3536,7 +3704,7 @@ const commerceHandler = async (req: Request) => {
               price_data: {
                 currency: String(order.currency || 'SEK').toLowerCase(),
                 product_data: { name: line.product_name },
-                unit_amount: Number(line.unit_price_minor),
+                unit_amount: Math.round((Number(line.unit_price_minor) * Number(line.quantity || 1) - Number(line.discount_minor || 0)) / Number(line.quantity || 1)),
                 tax_behavior: 'inclusive',
               },
               quantity: Number(line.quantity || 1),

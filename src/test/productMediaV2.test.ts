@@ -42,7 +42,8 @@ describe("Admin Commerce product media V2 contracts", () => {
     expect(adminExperience).not.toContain('label="Bildlänk"');
     expect(adminExperience).toContain("<DraftProductMediaPicker");
     expect(adminExperience).toContain("<ProductMediaEditor");
-    expect(mediaEditor).toContain('multiple capture="environment"');
+    expect(mediaEditor).toMatch(/type="file"[^>]*multiple/);
+    expect(mediaEditor).not.toContain('capture="environment"');
     expect(mediaEditor).toContain('data-testid="product-image-dropzone"');
     expect(mediaEditor).toContain('action: "reorder"');
     expect(mediaEditor).toContain('action: "archive"');
