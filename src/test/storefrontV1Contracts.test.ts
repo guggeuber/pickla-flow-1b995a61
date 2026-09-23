@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const commerceSource = readFileSync("supabase/functions/api-commerce/index.ts", "utf8");
 const adminSource = readFileSync("supabase/functions/api-admin/index.ts", "utf8");
+const commerceClientSource = readFileSync("src/lib/commerce.ts", "utf8");
 const migration = readFileSync(
   "supabase/migrations/20260923120000_storefront_v1_product_presentation.sql",
   "utf8",
@@ -47,6 +48,11 @@ describe("Storefront V1 server contracts", () => {
     expect(commerceSource).toContain("p_provider_idempotency_key");
     expect(commerceSource).toContain("commerce_r2a_prepare_checkout");
     expect(commerceSource).toContain("tracked_activity_addon_unsupported");
+  });
+
+  it("never serves stale catalog pricing, inventory or cover media", () => {
+    expect(commerceSource).toContain("return privateJsonResponse({");
+    expect(commerceClientSource).toContain('{ cache: "no-store" }');
   });
 
   it("validates privacy-safe storefront events against venue, product and variant", () => {

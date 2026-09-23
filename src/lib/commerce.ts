@@ -468,7 +468,7 @@ export function fetchCommerceCatalog(venueId: string, locale: "sv-SE" | "en-SE" 
     message: string | null;
     products: CommerceProduct[];
     relationships: CommerceRelationship[];
-  }>("api-commerce", "catalog", { venueId, locale });
+  }>("api-commerce", "catalog", { venueId, locale }, { cache: "no-store" });
 }
 
 export function createCommerceCart(input: {

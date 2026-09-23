@@ -70,6 +70,7 @@ export type ApiClientTiming = {
 
 export type ApiRequestOptions = {
   auth?: "session" | "omit";
+  cache?: RequestCache;
   expectedStatuses?: number[];
   signal?: AbortSignal;
   publicRead?: {
@@ -278,6 +279,7 @@ async function publicReadRequest<T>({ method, fn, endpoint, params, body, option
     try {
       response = await fetch(url, {
         method,
+        cache: options.cache,
         headers: buildHeaders(includeJsonContentType, accessToken, clientRequestId, !correlationInQuery),
         signal: options.signal,
         ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }),
@@ -499,6 +501,7 @@ async function apiRequest<T>({ method, fn, endpoint, params, body, options }: Ap
     try {
       return await fetch(url, {
         method,
+        cache: options.cache,
         headers: buildHeaders(includeJsonContentType, accessToken, clientRequestId, !correlationInQuery),
         signal: options.signal,
         ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }),

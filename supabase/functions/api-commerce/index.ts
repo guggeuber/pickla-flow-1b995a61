@@ -1,4 +1,4 @@
-import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
+import { corsHeaders, errorResponse, jsonResponse, privateJsonResponse } from '../_shared/cors.ts';
 import { getAuthenticatedClient, getServiceClient } from '../_shared/auth.ts';
 import { requireVenueRole } from '../_shared/authorization.ts';
 import { resolveScopeAwarePricingDecision } from '../_shared/scope_pricing.ts';
@@ -2682,7 +2682,7 @@ const commerceHandler = async (req: Request) => {
         } : {}),
       }));
       const availableProductIds = new Set(availableProducts.map((product) => product.id));
-      return jsonResponse({
+      return privateJsonResponse({
         commerce_available: venue.commerce_enabled === true,
         message: venue.commerce_enabled === true ? null : 'Pickla Store är inte aktiverad för denna anläggning.',
         products: availableProducts,
@@ -2690,7 +2690,7 @@ const commerceHandler = async (req: Request) => {
           availableProductIds.has(relationship.source_product_id)
           && availableProductIds.has(relationship.target_product_id)
         )),
-      }, 200, 0);
+      });
     }
 
     if (req.method === 'POST' && path === 'event') {

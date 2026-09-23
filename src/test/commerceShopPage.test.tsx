@@ -96,7 +96,7 @@ describe("CommerceShopPage", () => {
     await waitFor(() => expect(api.get).toHaveBeenCalledWith("api-commerce", "catalog", {
       venueId,
       locale: "sv-SE",
-    }));
+    }, { cache: "no-store" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Visa bilder för Pink Pickla Bag" }));
     expect(screen.getByRole("dialog", { name: "Bilder för Pink Pickla Bag" })).toBeInTheDocument();
