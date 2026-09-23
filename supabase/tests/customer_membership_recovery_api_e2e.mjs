@@ -91,9 +91,8 @@ async function createUser(label, displayName = label) {
   const customer = (await rest("customers", `auth_user_id=eq.${user.id}&select=id`)).payload[0];
   assert(customer?.id, `canonical customer missing for ${label}`);
   customerIds.add(customer.id);
-  await rest("player_profiles", "", {
-    method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+  await rest("player_profiles", `auth_user_id=eq.${user.id}`, {
+    method: "PATCH",
     body: {
       auth_user_id: user.id,
       customer_id: customer.id,
@@ -118,17 +117,23 @@ async function createUser(label, displayName = label) {
 const organizationA = (await rest("organizations", "slug=eq.pickla&select=id")).payload[0];
 assert(organizationA?.id, "local Pickla organization missing");
 
-const [operator, ordinary, globalAdmin, personA, personA2, assignPerson, foreignPerson] = await Promise.all([
-  createUser("operator"),
-  createUser("ordinary"),
-  createUser("global-admin"),
-  createUser("venue-a-person", `${needle} Venue A`),
-  createUser("venue-a2-person", `${needle} Venue A2`),
-  createUser("canonical-person", `Canonical ${needle}`),
-  createUser("foreign-person", `${needle} Foreign`),
-]);
-
+let operator;
+let ordinary;
+let globalAdmin;
+let personA;
+let personA2;
+let assignPerson;
+let foreignPerson;
 try {
+  [operator, ordinary, globalAdmin, personA, personA2, assignPerson, foreignPerson] = await Promise.all([
+    createUser("operator"),
+    createUser("ordinary"),
+    createUser("global-admin"),
+    createUser("venue-a-person", `${needle} Venue A`),
+    createUser("venue-a2-person", `${needle} Venue A2`),
+    createUser("canonical-person", `Canonical ${needle}`),
+    createUser("foreign-person", `${needle} Foreign`),
+  ]);
   await rest("organizations", "", { method: "POST", body: {
     id: ids.organizationB,
     name: `Recovery Org B ${run}`,
