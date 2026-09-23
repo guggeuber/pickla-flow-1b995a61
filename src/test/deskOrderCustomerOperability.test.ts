@@ -57,7 +57,7 @@ describe("Desk order/customer operability regression", () => {
   it("keeps staff PII reads venue-authorized and scopes detail/search by canonical venue IDs", () => {
     expect(commerceApi).toContain("await requireVenueRole(admin, userId, venueId, ['venue_admin', 'desk_staff'])");
     expect(commerceApi).toContain(".eq('id', orderId).eq('venue_id', venueId)");
-    expect(customersApi).toContain("const canList = await assertCanListCustomers(admin, userId, venueId)");
+    expect(customersApi).toContain("const canList = await canListCustomers(admin, userId, venueId)");
     expect(customersApi).toContain("Customer not found for venue");
     expect(customersApi).toContain("Order identity does not match requested customer");
     expect(customersApi).toContain("eligibleCustomerIds");

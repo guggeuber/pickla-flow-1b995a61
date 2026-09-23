@@ -568,12 +568,12 @@ Deno.serve(async (req) => {
       if (!assignTier || assignTier.venue_id !== venueId) return errorResponse('Tier not found for venue', 404);
       if (assignTier.is_assignable === false) return errorResponse('Tier is not assignable', 403);
 
+      const customerId = await resolveOrCreateCustomerIdForUser(admin, customerUserId, venueId, 'admin_membership_assignment');
+      if (!customerId) return errorResponse('Kunden kunde inte kopplas till medlemskapet', 409);
+
       await admin.from('memberships')
         .update({ status: 'cancelled' })
         .eq('user_id', customerUserId).eq('venue_id', venueId).eq('status', 'active');
-
-      const customerId = await resolveOrCreateCustomerIdForUser(admin, customerUserId, venueId, 'admin_membership_assignment');
-      if (!customerId) return errorResponse('Kunden kunde inte kopplas till medlemskapet', 409);
 
       const { data, error: iErr } = await admin.from('memberships').insert({
         user_id: customerUserId,
@@ -636,8 +636,23 @@ Deno.serve(async (req) => {
         return errorResponse('Medlemskap kräver förnamn, efternamn och telefon på kunden', 400);
       }
 
+      const customerId = await resolveOrCreateCustomerIdForUser(
+        admin,
+        targetUserId,
+        venueId,
+        'admin_membership_assignment',
+        {
+          displayName: existingProfile?.display_name || String(displayName || fullName(mergedFirstName, mergedLastName) || '').trim(),
+          firstName: mergedFirstName,
+          lastName: mergedLastName,
+          phone: mergedPhone,
+        },
+      );
+      if (!customerId) return errorResponse('Kunden kunde inte kopplas till medlemskapet', 409);
+
       await admin.from('player_profiles').upsert({
         auth_user_id: targetUserId,
+        customer_id: customerId,
         display_name: existingProfile?.display_name || String(displayName || fullName(mergedFirstName, mergedLastName) || '').trim(),
         first_name: mergedFirstName,
         last_name: mergedLastName,
@@ -647,9 +662,6 @@ Deno.serve(async (req) => {
       await admin.from('memberships')
         .update({ status: 'cancelled' })
         .eq('user_id', targetUserId).eq('venue_id', venueId).eq('status', 'active');
-
-      const customerId = await resolveOrCreateCustomerIdForUser(admin, targetUserId, venueId, 'admin_membership_assignment');
-      if (!customerId) return errorResponse('Kunden kunde inte kopplas till medlemskapet', 409);
 
       const { data, error: iErr } = await admin.from('memberships').insert({
         user_id: targetUserId,
