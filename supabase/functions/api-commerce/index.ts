@@ -44,6 +44,10 @@ import {
   loadCommerceProductPricingContext,
   resolveCommerceProductPrice,
 } from '../_shared/commerce_product_pricing.ts';
+import {
+  STOREFRONT_MEDIA_CACHE_HEADERS,
+  storefrontProductIsPublicForLocale,
+} from '../_shared/storefront_publication.ts';
 import { DateTime } from 'https://esm.sh/luxon@3.5.0';
 
 const CART_TOKEN_BYTES = 32;
@@ -2488,7 +2492,7 @@ const commerceHandler = async (req: Request) => {
         headers: {
           ...corsHeaders,
           'Content-Type': image.type || 'application/octet-stream',
-          'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
+          ...STOREFRONT_MEDIA_CACHE_HEADERS,
           'X-Content-Type-Options': 'nosniff',
         },
       });
@@ -2571,6 +2575,7 @@ const commerceHandler = async (req: Request) => {
       const presentationByProduct = new Map(presentationRows
         .filter((row) => row.locale === locale && row.publication_state === 'published')
         .map((row) => [String(row.product_id), row]));
+      const productsWithPublishedPresentationForLocale = new Set(presentationByProduct.keys());
       const assignmentsByVariant = new Map<string, any[]>();
       const mediaByProduct = new Map<string, CommerceProductMedia[]>();
       for (const item of (media || []) as CommerceProductMediaSource[]) {
@@ -2623,6 +2628,11 @@ const commerceHandler = async (req: Request) => {
       });
       const relatedProductIds = new Set(visibleRelationships.map((relationship) => relationship.target_product_id));
       const availableProducts = productRows.filter((product) => {
+        if (!storefrontProductIsPublicForLocale(
+          product.id,
+          productsWithPresentation,
+          productsWithPublishedPresentationForLocale,
+        )) return false;
         if (product.inventory_policy === 'tracked') {
           const listing = listingByProduct.get(product.id);
           return venue.commerce_enabled === true && venue.tracked_merch_sales_enabled === true
@@ -4172,7 +4182,7 @@ const commerceHandler = async (req: Request) => {
     const message = error instanceof Error ? error.message : 'Unexpected commerce error';
     console.error('api-commerce', path, message);
     if (message === 'Unauthorized') return errorResponse(message, 401);
-    if (message === 'Forbidden') return errorResponse(message, 403);
+    if (message.startsWith('Forbidden')) return errorResponse(message, 403);
     if (message === 'Cart expired') return errorResponse(message, 410);
     if (message === 'Shop cart owner conflict') return errorResponse(message, 409);
     if (message.includes('stale_cart_version')) return errorResponse('Cart changed — review it again.', 409);

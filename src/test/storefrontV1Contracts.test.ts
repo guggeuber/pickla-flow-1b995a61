@@ -33,7 +33,10 @@ describe("Storefront V1 server contracts", () => {
     expect(migration).toContain("SECURITY DEFINER");
     expect(commerceSource).toContain("productsWithPublishedPresentation");
     expect(commerceSource).toContain("productsWithPresentation.has(productId) && !productsWithPublishedPresentation.has(productId)");
+    expect(commerceSource).toContain("storefrontProductIsPublicForLocale(");
+    expect(commerceSource).toContain("productsWithPublishedPresentationForLocale");
     expect(commerceSource).toContain("Product image not found");
+    expect(commerceSource).toContain("STOREFRONT_MEDIA_CACHE_HEADERS");
   });
 
   it("uses one pricing resolver for catalog, cart freeze and Stripe net amount", () => {
@@ -61,5 +64,10 @@ describe("Storefront V1 server contracts", () => {
     expect(commerceSource).toContain(".eq('venue_id', venueId)");
     expect(commerceSource).toContain("validatedVariantId = variant.id");
     expect(commerceSource).toContain("journey_id_hash");
+  });
+
+  it("returns authorization failures as forbidden without weakening role checks", () => {
+    expect(commerceSource).toContain("message.startsWith('Forbidden')");
+    expect(commerceSource).toContain("requireVenueRole(");
   });
 });
