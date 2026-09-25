@@ -1,5 +1,6 @@
 import { resolveCustomerIdForUser } from './customers.ts';
 import { activitySessionOccurrenceInterval } from './activity_session_time.ts';
+import { activityInclusionPolicy } from './activity_inclusion_policy.ts';
 
 const PLAYING_HOST_ROLE = 'playing_host';
 const LEGACY_HOST_COMP = 'host_comp';
@@ -59,12 +60,6 @@ function formatSek(amount: number) {
 
 function isPositiveEntitlement(row: any, type: string) {
   return row?.entitlement_type === type && Number(row.value ?? 1) > 0;
-}
-
-function boolFromMetadata(value: unknown, fallback: boolean) {
-  if (typeof value === 'boolean') return value;
-  if (value == null) return fallback;
-  return String(value) === 'true';
 }
 
 function scarcityModeFrom(value: unknown) {
@@ -699,12 +694,7 @@ export async function resolveActivityPricingDecision({
     ? rawPricingMode
     : 'standard';
   const memberDiscountPercent = clampPercent(sessionMetadata.member_discount_percent);
-  const dayPassIncluded = pricingMode === 'standard'
-    ? boolFromMetadata(sessionMetadata.day_pass_included, session.access_policy?.allows_day_access !== false)
-    : false;
-  const membershipIncluded = pricingMode === 'standard'
-    ? boolFromMetadata(sessionMetadata.membership_included, true)
-    : false;
+  const { dayPassIncluded, membershipIncluded } = activityInclusionPolicy(session, pricingMode);
   const debug: Record<string, unknown> = {
     session_product_key: session.product_key || null,
     requested_product_key: requestedProductKey || null,
@@ -928,7 +918,7 @@ export async function resolveActivityPricingDecision({
           debug.entitlement = 'open_play_unlimited';
         }
 
-        if (finalAmountSek > 0 && (purchaseKind !== 'activity_ticket' || membershipIncluded)) {
+        if (finalAmountSek > 0) {
           const tierPricingAmounts = (tierPricingRows || [])
             .filter((row: any) => row.fixed_price != null || row.discount_percent != null)
             .map((row: any) => {
@@ -941,7 +931,7 @@ export async function resolveActivityPricingDecision({
             finalAmountSek = Math.min(...tierPricingAmounts);
             pricingReason = 'membership_tier_pricing';
             debug.pricing_source = 'membership_tier_pricing';
-          } else {
+          } else if (purchaseKind !== 'activity_ticket' || membershipIncluded) {
             const fallbackDiscount = Number(tier?.discount_percent || 0);
             if (fallbackDiscount > 0) {
               finalAmountSek = applyPercentDiscount(baseAmountSek, fallbackDiscount);
