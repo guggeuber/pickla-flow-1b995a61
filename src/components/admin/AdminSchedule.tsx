@@ -333,15 +333,21 @@ const buildPricingMetadata = ({
   deskPrice,
   corporatePrice,
   promoPrice,
+  includedInDayPass,
+  includedInUnlimited,
 }: {
   existingMetadata?: Record<string, any>;
   onlinePrice: number;
   deskPrice: number;
   corporatePrice?: number | string | null;
   promoPrice?: number | string | null;
+  includedInDayPass: boolean;
+  includedInUnlimited: boolean;
 }) => {
   const metadata: Record<string, any> = {
     ...existingMetadata,
+    day_pass_included: includedInDayPass,
+    membership_included: includedInUnlimited,
     online_price_sek: onlinePrice,
     desk_price_sek: deskPrice,
     pricing_channel_mode: deskPrice > onlinePrice ? "online_discount" : "standard",
@@ -500,11 +506,13 @@ const memberPriceForProduct = ({
   basePrice,
   tiers,
   tierPricing,
+  membershipIncluded = true,
 }: {
   productKey: string | null;
   basePrice: number;
   tiers: MembershipTier[];
   tierPricing: TierPricing[];
+  membershipIncluded?: boolean;
 }) => {
   if (!productKey) return "Ingen produkt";
   const activeTiers = tiers.filter((tier) => tier.is_active);
@@ -512,9 +520,9 @@ const memberPriceForProduct = ({
     const name = tier.name.toLowerCase();
     return (name === "play" || name.includes("access")) && !name.includes("+") && !name.includes("plus") && !name.includes("unlimited");
   }) || activeTiers[0];
-  if (!preferredTier) return "Sätt i Medlemskap";
+  if (!preferredTier) return membershipIncluded ? "Sätt i Medlemskap" : formatSek(basePrice);
   const rule = tierPricing.find((row) => row.tier_id === preferredTier.id && row.product_type === productKey);
-  if (!rule) return "Sätt i Medlemskap";
+  if (!rule) return membershipIncluded ? "Sätt i Medlemskap" : formatSek(basePrice);
   const effectivePrice = rule.fixed_price != null
     ? Number(rule.fixed_price)
     : Math.max(0, Math.round(basePrice * (1 - Number(rule.discount_percent || 0) / 100)));
@@ -577,7 +585,7 @@ const pricingPreview = ({
   return [
     ["Online", formatSek(price)],
     ["Desk", formatSek(desk)],
-    ["Pickla Access / Play", memberPriceForProduct({ productKey: resolvedProductKey, basePrice: price, tiers, tierPricing })],
+    ["Pickla Access / Play", memberPriceForProduct({ productKey: resolvedProductKey, basePrice: price, tiers, tierPricing, membershipIncluded: includedInUnlimited })],
     ["Unlimited / Play+", includedInUnlimited ? "Ingår" : "Ej inkluderat"],
     ["Dagsmedlemskap", includedInDayPass ? "Ingår idag" : "Ej access"],
     ...optionalRows,
@@ -886,6 +894,8 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         deskPrice: desk,
         corporatePrice,
         promoPrice,
+        includedInDayPass,
+        includedInUnlimited,
       }),
       scarcity_mode: scarcityMode,
       early_bird_price_minor: scarcityMode === "early_bird" ? priceSekToMinor(earlyBirdPrice) : null,
@@ -1059,6 +1069,8 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
         deskPrice: desk,
         corporatePrice: draft.corporate_price_sek,
         promoPrice: draft.promo_price_sek,
+        includedInDayPass: Boolean(draft.included_in_day_pass),
+        includedInUnlimited: Boolean(draft.included_in_unlimited),
       }),
       scarcity_mode: draft.scarcity_mode || "none",
       early_bird_price_minor: draft.scarcity_mode === "early_bird" ? priceSekToMinor(draft.early_bird_price_sek) : null,
@@ -1290,7 +1302,12 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
           <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Vad säljer vi?</p>
           <select
             value={createProductKey}
-            onChange={(e) => setSessionProductKey(e.target.value)}
+            onChange={(e) => {
+              const selectedProduct = productMap[e.target.value];
+              const selectedBasePrice = String(numericPrice(selectedProduct?.base_price_sek ?? 0));
+              setSessionProductKey(e.target.value);
+              setPrice(selectedBasePrice);
+            }}
             className="w-full rounded-xl px-3 py-2.5 text-xs outline-none"
             style={inputStyle}
           >
@@ -1544,12 +1561,15 @@ const AdminSchedule = ({ venueId }: { venueId: string }) => {
                         onChange={(e) => {
                           const nextProduct = productMap[e.target.value];
                           const nextSoldAs = soldAsFromProduct(nextProduct, e.target.value);
+                          const nextBasePrice = numericPrice(nextProduct?.base_price_sek ?? 0);
                           setSessionDrafts((current) => ({
                             ...current,
                             [session.id]: {
                               ...draft,
                               product_key: e.target.value,
                               sold_as: nextSoldAs,
+                              price_sek: nextBasePrice,
+                              online_price_sek: nextBasePrice,
                               included_in_day_pass: nextSoldAs === "day_pass" ? true : draft.included_in_day_pass,
                             },
                           }));

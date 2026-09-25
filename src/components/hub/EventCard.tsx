@@ -19,6 +19,7 @@ import { fetchActivitySessionOverrides, isPublicActivityOverrideHidden, occurren
 import { MemberStrip } from "@/components/ui/MemberStrip";
 import { PriceLine } from "@/components/ui/PriceLine";
 import { PeopleRow, ScarcityBadge } from "@/components/ui/PeopleRow";
+import { activityInclusionPolicy } from "../../../supabase/functions/_shared/activity_inclusion_policy";
 
 const FONT_HEADING = "'Space Grotesk', sans-serif";
 const HUB_RED = "#CC2936";
@@ -218,12 +219,17 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const specialMemberPrice = pricingMode === "member_discount"
       ? Math.max(0, Math.round(onlinePrice * (1 - memberDiscountPercent / 100) * 100) / 100)
       : onlinePrice;
+    const inclusion = activityInclusionPolicy(effectiveProgramSession as any, pricingMode);
+    const dayPassIncluded = pricingDebug.day_pass_included ?? inclusion.dayPassIncluded;
+    const membershipIncluded = pricingDebug.membership_included ?? inclusion.membershipIncluded;
     const pricing = mergeBackendActivityPricing(activityPriceLabels({
       basePrice: Number(effectiveProgramSession.price_sek || 165),
       productKey: (effectiveProgramSession as any).product_key,
       sessionType: effectiveProgramSession.session_type,
       membership,
       hasDayAccess: !!dayAccess,
+      dayPassIncluded,
+      membershipIncluded,
     }), backendPricing);
     const userHasMembership = hasActiveMembership(membership);
     const isRegistered = !!user?.id && programRegistrations.some((row: any) => row.user_id === user.id);
@@ -250,7 +256,7 @@ export function EventCard({ eventId, venueId, venueSlug, isDropIn, roomId, publi
     const displayedPrice = pricingIsIncluded ? customerPrice : customerPrice <= 0 ? 0 : customerPrice;
     const memberContextLine = !userHasMembership && pricingMode === "member_discount" && specialMemberPrice < onlinePrice
       ? <>Medlemmar spelar för {formatSek(specialMemberPrice)} eller fritt</>
-      : !userHasMembership && pricingMode === "standard"
+      : !userHasMembership && pricingMode === "standard" && membershipIncluded
         ? <>Medlemmar kan spela billigare eller fritt</>
         : undefined;
     const announceJoin = async () => {
