@@ -16,6 +16,8 @@ Stage/isolated Edge verification and real Stripe test-mode checkout remain pendi
 
 ### Immutable sources and publication state
 
+Coordinated review artifact: [draft PR #3](https://github.com/guggeuber/pickla-flow-1b995a61/pull/3), branch `codex/student-pricing-coordinated-release-20260926`. Published source/register head before this publication-note commit: `2ae648edd74abfbe198092964e117d8cfb1070fc`. It remains DRAFT and unmerged. Normal automatic Vercel preview builds may run; these are frontend previews and do not establish candidate Edge or Stripe lifecycle parity. Shared Stage and mail production aliases are preserved.
+
 | Source | Exact SHA / state |
 | --- | --- |
 | Fresh canonical `origin/main` | `567581097d97a8631fc95c2770bffdcbba6effd9`; fetched and rechecked with canonical `ls-remote`; unchanged |
