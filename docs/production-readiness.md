@@ -47,6 +47,7 @@ Manual smoke:
 - Open Play session can be listed, purchased or joined through membership.
 - Group training can be listed and purchased.
 - A product price change affects the customer flow expected for that product.
+- Open Play with Studentpris selected (59 kr) and both inclusion toggles off stays 59 kr for guest, Play, Play+, and Founder after save and reload, unless Studentpris has an explicit membership price; normal Open Play still honors its configured benefits.
 - A paused/cancelled series does not appear as active customer inventory.
 
 ## Gate 3: Stripe And Payments

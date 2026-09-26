@@ -188,19 +188,25 @@ export function activityPriceLabels({
   sessionType,
   membership,
   hasDayAccess,
+  dayPassIncluded = true,
+  membershipIncluded = true,
 }: {
   basePrice: number;
   productKey?: string | null;
   sessionType?: string | null;
   membership?: MembershipLike;
   hasDayAccess?: boolean;
+  dayPassIncluded?: boolean;
+  membershipIncluded?: boolean;
 }) {
   const safeBasePrice = Math.max(0, Math.round(Number(basePrice || 0)));
   const activeMembership = hasActiveMembership(membership);
-  const accessPrice = accessPriceForActivity(safeBasePrice, productKey, membership);
-  const includedByMembership = hasIncludedActivityAccess(membership, productKey, sessionType);
-  const finalPrice = hasDayAccess || includedByMembership ? 0 : activeMembership ? Math.min(safeBasePrice, accessPrice) : safeBasePrice;
-  const includedLabel = hasDayAccess ? "Ingår idag" : includedByMembership ? "Ingår" : null;
+  const explicitRule = membership?.tier_pricing?.some((row) => row.product_type === productKey && (row.fixed_price != null || row.discount_percent != null));
+  const accessPrice = membershipIncluded || explicitRule ? accessPriceForActivity(safeBasePrice, productKey, membership) : safeBasePrice;
+  const includedByMembership = membershipIncluded && hasIncludedActivityAccess(membership, productKey, sessionType);
+  const includedByDayPass = dayPassIncluded && hasDayAccess;
+  const finalPrice = includedByDayPass || includedByMembership ? 0 : activeMembership && (membershipIncluded || explicitRule) ? Math.min(safeBasePrice, accessPrice) : safeBasePrice;
+  const includedLabel = includedByDayPass ? "Ingår idag" : includedByMembership ? "Ingår" : null;
 
   return {
     basePrice: safeBasePrice,
@@ -212,13 +218,13 @@ export function activityPriceLabels({
       `Ordinarie ${formatSek(safeBasePrice)}`,
       includedLabel ? includedLabel : finalPrice < safeBasePrice ? `Du sparar ${formatSek(safeBasePrice - finalPrice)}` : `${PICKLA_ACCESS_LABEL} ${formatSek(accessPrice)}`,
       includedLabel ? "Ditt pris 0 kr" : `Ditt pris ${formatSek(finalPrice)}`,
-      `${PICKLA_UNLIMITED_LABEL} ingår`,
+      membershipIncluded ? `${PICKLA_UNLIMITED_LABEL} ingår` : `${PICKLA_UNLIMITED_LABEL} ej inkluderat`,
     ],
     detailRows: [
       { label: "Ordinarie pris", value: formatSek(safeBasePrice) },
       { label: "Du sparar", value: finalPrice < safeBasePrice ? formatSek(safeBasePrice - finalPrice) : formatSek(0) },
       { label: "Ditt pris", value: includedLabel || formatSek(finalPrice) },
-      { label: `Ingår i ${PICKLA_UNLIMITED_LABEL}`, value: hasIncludedActivityAccess(membership, productKey, sessionType) ? "Ja" : "Nej" },
+      { label: `Ingår i ${PICKLA_UNLIMITED_LABEL}`, value: includedByMembership ? "Ja" : "Nej" },
     ],
     checkoutLabel: includedLabel || formatSek(finalPrice),
   };
