@@ -93,7 +93,14 @@ function stage(id) {
   if (dirty()) fail("dirty runner checkout");
   const stageLock = join(registryDir, "isolated-stage.lock");
   mkdirSync(registryDir, { recursive: true });
-  return withStageLock(stageLock, () => withIsolatedTargetLock(root, id, () => stageLocked(record, id)));
+  try {
+    return withStageLock(stageLock, () => withIsolatedTargetLock(root, id, () => stageLocked(record, id)));
+  } catch (error) {
+    record.status = "BLOCKED";
+    record.blockers = [`isolated target lock unavailable: ${error.message}`];
+    save(record, "BLOCKED", { key: "stage-lock", reason: record.blockers[0] });
+    console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers }));
+  }
 }
 function stageLocked(record, id) {
   const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage" && value.owner && value.supabase_ref && value.vercel_project_id && value.preview_git_branch);

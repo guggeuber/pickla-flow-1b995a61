@@ -29,8 +29,11 @@ export function withIsolatedTargetLock(root, releaseId, action) {
       if (prior.target !== "byuwuoivuuklcwmoesrx" || prior.status !== "free") throw new Error(`isolated target locked by ${prior.release_id || "unknown"}`);
     } else {
       git(["checkout", "--quiet", "--orphan", "isolated-lock"], work);
+      // An orphan checkout inherits the source index. The lock ref must contain
+      // only lock.json, never the application tree or ignored local files.
+      git(["rm", "-r", "--cached", "--ignore-unmatch", "."], work);
     }
-    try { commit("held"); } catch { throw new Error("isolated target lock lost concurrent compare-and-swap"); }
+    try { commit("held"); } catch (error) { throw new Error(`isolated target lock push failed: ${String(error.stderr || "concurrent compare-and-swap rejected").trim().slice(0, 300)}`); }
     acquired = true;
     return action();
   } finally {

@@ -24,6 +24,7 @@ try {
       if (!existsSync(join(work, ".git"))) git(["clone", "--no-checkout", "--shared", root, work]);
       git(["remote", "set-url", "origin", originUrl], work);
       git(["checkout", "--orphan", branch], work);
+      git(["rm", "-r", "--cached", "--ignore-unmatch", "."], work);
       for (const name of readdirSync(work)) if (name !== ".git") rmSync(join(work, name), { recursive: true, force: true });
     }
     mkdirSync(join(work, "records"), { recursive: true });
