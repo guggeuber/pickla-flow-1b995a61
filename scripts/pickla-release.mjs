@@ -68,6 +68,13 @@ function mainGuard(record) {
   if (git(["rev-parse", `${record.candidate_sha}^{tree}`]) !== record.tree_sha) fail("candidate tree changed");
   if (digest(policyBytes) !== record.policy_sha) fail("policy changed");
 }
+function trustedMain(record) {
+  if (git(["rev-parse", "HEAD"]) !== record.base_sha) return false;
+  try {
+    execFileSync("gh", ["api", "repos/guggeuber/pickla-flow-1b995a61/branches/main/protection"], { cwd: root, timeout: 30000, stdio: "ignore" });
+    return true;
+  } catch { return false; }
+}
 function inspect(sha) {
   if (!shaPattern.test(sha || "")) fail("full 40-character SHA required");
   if (dirty()) fail("dirty runner checkout");
@@ -116,7 +123,7 @@ function stageLocked(record, id) {
   }
   const preflight = isolatedStagePreflight(inventory, target);
   if (!preflight.ready) return blocked("stage-routing", `isolated routing preflight: ${preflight.blockers.join("; ")}`);
-  if (inventory.github?.branch_protection?.main !== true || git(["rev-parse", "HEAD"]) !== record.base_sha) {
+  if (!trustedMain(record)) {
     return blocked("trusted-main", "trusted-main Stage runner unavailable: protected main does not yet contain Release V1 policy and workflow");
   }
   if (record.affected_edge_functions.length) return blocked("edge-deploy", "candidate changes Edge functions; isolated Edge deployment/version adapter is not approved for this target");
@@ -159,7 +166,7 @@ function verify(id) {
     }
   } finally { rmSync(temp, { recursive: true, force: true }); }
   const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage");
-  if (record.stage && target && inventory.github?.branch_protection?.main === true && git(["rev-parse", "HEAD"]) === record.base_sha && process.env.STAGE_VERCEL_TOKEN && process.env.STAGE_SUPABASE_ACCESS_TOKEN) {
+  if (record.stage && target && trustedMain(record) && process.env.STAGE_VERCEL_TOKEN && process.env.STAGE_SUPABASE_ACCESS_TOKEN) {
     try {
       withStageLock(join(registryDir, "isolated-stage.lock"), () => withIsolatedTargetLock(root, id, () => {
         const current = discoverExactPreview(target, record.candidate_sha);
@@ -182,7 +189,7 @@ function verify(id) {
       : record.stage ? "trusted deployed-behavior evidence unavailable" : "exact-SHA isolated preview not staged";
     record.invariants[item.id] = { status: "blocked", reason };
   }
-  record.blockers = [...record.blockers.filter((value) => value.startsWith("isolated deployed-behavior gate failed:")), ...Object.entries(record.invariants).filter(([, value]) => value.status !== "passed").map(([key, value]) => `${key}: ${value.status}${value.reason ? ` (${value.reason})` : ""}`)];
+  record.blockers = [...record.blockers.filter((value) => value.startsWith("isolated deployed-behavior gate failed:") || value.startsWith("trusted-main Stage runner unavailable:") || value.startsWith("isolated target lock unavailable:")), ...Object.entries(record.invariants).filter(([, value]) => value.status !== "passed").map(([key, value]) => `${key}: ${value.status}${value.reason ? ` (${value.reason})` : ""}`)];
   record.status = record.blockers.length ? "BLOCKED" : "READY_FOR_APPROVAL";
   save(record, "VERIFIED", { key: digest(JSON.stringify(record.invariants)), status: record.status });
   console.log(JSON.stringify({ release_id: id, status: record.status, invariants: record.invariants, blockers: record.blockers }, null, 2));
