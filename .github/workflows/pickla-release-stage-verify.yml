@@ -1,0 +1,37 @@
+name: Pickla release Stage and verify
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Inspected release ID
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: pickla-stage-v1
+  cancel-in-progress: false
+jobs:
+  stage_verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Load release register
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          [[ "$RELEASE_ID" =~ ^rel-[0-9a-f]{12}-[0-9a-f]{8}$ ]]
+          git fetch origin refs/heads/pickla-release-registry:refs/remotes/origin/pickla-release-registry
+          mkdir -p .pickla-release-v1
+          git show "origin/pickla-release-registry:records/${RELEASE_ID}.json" > ".pickla-release-v1/${RELEASE_ID}.json"
+      - name: Verify local evidence and report Stage blocker
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          npm ci --ignore-scripts
+          node scripts/pickla-release.mjs stage "$RELEASE_ID"
+          node scripts/pickla-release.mjs verify "$RELEASE_ID"
+          node scripts/release-registry-sync.mjs
