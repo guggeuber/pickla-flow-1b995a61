@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "release_id": "rel-e9bc19061d25-ae5fc683",
+  "candidate_sha": "e9bc19061d2535ba0b59c9df0efc8943755792e8",
+  "base_sha": "39373c657589f46673c2563c03879b7201e8bd30",
+  "policy_sha": "253a3d7e597a49c40c366e28b12a41a59afc1418a319b54cde60b0702f10f09a",
+  "tree_sha": "5f1942906c92e2beddb53743c341f767a71c4dfc",
+  "domains": [
+    "Commerce",
+    "Customer UX/PWA",
+    "Platform/DB/Edge",
+    "Pricing"
+  ],
+  "capabilities": [
+    "pricing",
+    "release_policy",
+    "student_price",
+    "web"
+  ],
+  "risk_floor": "HIGH",
+  "urgency": "normal",
+  "decision": "CLASSIFIED",
+  "reasons": [
+    "server pricing or entitlement"
+  ],
+  "affected_edge_functions": [],
+  "edge_manifest": {},
+  "invariants": {
+    "price.server_authoritative": {
+      "status": "blocked",
+      "reason": "exact-SHA isolated preview not staged"
+    },
+    "release.identity_exact": {
+      "status": "passed",
+      "exit_code": 0,
+      "log_sha256": "1263c96fb55c83c770e371f0ee7615dce41dc6e00f5544ba781bcd33a76eb826",
+      "at": "2026-10-01T16:42:32.008Z"
+    },
+    "release.stage_identity_exact": {
+      "status": "blocked",
+      "reason": "exact-SHA isolated preview not staged"
+    },
+    "studentpris.member_matrix": {
+      "status": "blocked",
+      "reason": "exact-SHA isolated preview not staged"
+    },
+    "open_play.inverse": {
+      "status": "blocked",
+      "reason": "exact-SHA isolated preview not staged"
+    },
+    "studentpris.admin_save_reload": {
+      "status": "blocked",
+      "reason": "exact-SHA isolated preview not staged"
+    },
+    "stripe.test_amount": {
+      "status": "blocked",
+      "reason": "real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured"
+    }
+  },
+  "stage": null,
+  "intended_production": {
+    "vercel": "UNKNOWN",
+    "supabase": "UNKNOWN",
+    "migrations": "manual-review"
+  },
+  "recovery_reference": null,
+  "evidence": {},
+  "status": "BLOCKED",
+  "blockers": [
+    "trusted-main Stage runner unavailable: protected main does not yet contain Release V1 policy and workflow",
+    "price.server_authoritative: blocked (exact-SHA isolated preview not staged)",
+    "release.stage_identity_exact: blocked (exact-SHA isolated preview not staged)",
+    "studentpris.member_matrix: blocked (exact-SHA isolated preview not staged)",
+    "open_play.inverse: blocked (exact-SHA isolated preview not staged)",
+    "studentpris.admin_save_reload: blocked (exact-SHA isolated preview not staged)",
+    "stripe.test_amount: blocked (real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured)"
+  ],
+  "created_at": "2026-10-01T16:41:56.733Z",
+  "updated_at": "2026-10-01T16:42:32.075Z",
+  "events": [
+    {
+      "event": "INSPECTED",
+      "key": "e9bc19061d2535ba0b59c9df0efc8943755792e8",
+      "at": "2026-10-01T16:41:56.734Z"
+    },
+    {
+      "event": "BLOCKED",
+      "key": "trusted-main",
+      "at": "2026-10-01T16:42:13.438Z",
+      "reason": "trusted-main Stage runner unavailable: protected main does not yet contain Release V1 policy and workflow"
+    },
+    {
+      "event": "EVIDENCE",
+      "key": "release.identity_exact",
+      "at": "2026-10-01T16:42:32.009Z",
+      "invariant": "release.identity_exact",
+      "status": "passed",
+      "digest": "1263c96fb55c83c770e371f0ee7615dce41dc6e00f5544ba781bcd33a76eb826"
+    },
+    {
+      "event": "VERIFIED",
+      "key": "cff7964d7e11df0673209d0f17e940af8f88564e18c933254f1b8cdaa2ff7f51",
+      "at": "2026-10-01T16:42:32.075Z",
+      "status": "BLOCKED"
+    }
+  ]
+}

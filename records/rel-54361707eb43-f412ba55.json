@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "release_id": "rel-54361707eb43-f412ba55",
+  "candidate_sha": "54361707eb4352e4cd6de73b561aeaf5b678fb82",
+  "base_sha": "39373c657589f46673c2563c03879b7201e8bd30",
+  "policy_sha": "64eb459035d29db8fea0c9c30e556dad8e50825756a949ac7a659142a327efac",
+  "tree_sha": "bda7c5e3a63a80b0de83e85b265c887dccbb97fa",
+  "domains": [
+    "Platform/DB/Edge"
+  ],
+  "capabilities": [
+    "release_policy"
+  ],
+  "risk_floor": "HOTFIX",
+  "urgency": "normal",
+  "decision": "CLASSIFIED",
+  "reasons": [],
+  "affected_edge_functions": [],
+  "edge_manifest": {},
+  "invariants": {
+    "release.identity_exact": {
+      "status": "passed",
+      "exit_code": 0,
+      "log_sha256": "e8c80ca99582da7ce155f3aab1323af7722ee824b8ecc012ac4c51d0dc45b4b1",
+      "at": "2026-10-01T14:35:06.053Z"
+    },
+    "release.stage_identity_exact": {
+      "status": "blocked",
+      "reason": "isolated Stage target unavailable"
+    }
+  },
+  "stage": null,
+  "intended_production": {
+    "vercel": "UNKNOWN",
+    "supabase": "UNKNOWN",
+    "migrations": "manual-review"
+  },
+  "recovery_reference": null,
+  "evidence": {},
+  "status": "BLOCKED",
+  "blockers": [
+    "release.stage_identity_exact: blocked (isolated Stage target unavailable)"
+  ],
+  "created_at": "2026-10-01T14:34:57.995Z",
+  "updated_at": "2026-10-01T14:35:06.113Z",
+  "events": [
+    {
+      "event": "INSPECTED",
+      "key": "54361707eb4352e4cd6de73b561aeaf5b678fb82",
+      "at": "2026-10-01T14:34:57.996Z"
+    },
+    {
+      "event": "BLOCKED",
+      "key": "stage-target",
+      "at": "2026-10-01T14:34:58.619Z",
+      "reason": "isolated Stage target unavailable"
+    },
+    {
+      "event": "EVIDENCE",
+      "key": "release.identity_exact",
+      "at": "2026-10-01T14:35:06.053Z",
+      "invariant": "release.identity_exact",
+      "status": "passed",
+      "digest": "e8c80ca99582da7ce155f3aab1323af7722ee824b8ecc012ac4c51d0dc45b4b1"
+    },
+    {
+      "event": "VERIFIED",
+      "key": "6956b3b19cccf06963d843245612a81c5685b72ff2d6a4ced268016f22a992ea",
+      "at": "2026-10-01T14:35:06.113Z",
+      "status": "BLOCKED"
+    }
+  ]
+}

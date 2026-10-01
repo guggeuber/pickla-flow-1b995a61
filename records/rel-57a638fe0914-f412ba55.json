@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "release_id": "rel-57a638fe0914-f412ba55",
+  "candidate_sha": "57a638fe0914fae212a88fc4287443d00825573d",
+  "base_sha": "39373c657589f46673c2563c03879b7201e8bd30",
+  "policy_sha": "64eb459035d29db8fea0c9c30e556dad8e50825756a949ac7a659142a327efac",
+  "tree_sha": "3577b8bc50bfb64efbf0e7fcd7a8e1af06fe09f1",
+  "domains": [
+    "Booking/Capacity",
+    "Platform/DB/Edge"
+  ],
+  "capabilities": [
+    "capacity",
+    "inventory",
+    "release_policy"
+  ],
+  "risk_floor": "HIGH",
+  "urgency": "normal",
+  "decision": "CLASSIFIED",
+  "reasons": [
+    "inventory or capacity concurrency"
+  ],
+  "affected_edge_functions": [],
+  "edge_manifest": {},
+  "invariants": {
+    "inventory.no_oversell": {
+      "status": "required"
+    },
+    "capacity.exactly_once": {
+      "status": "required"
+    },
+    "release.identity_exact": {
+      "status": "required"
+    },
+    "release.stage_identity_exact": {
+      "status": "required"
+    }
+  },
+  "stage": null,
+  "intended_production": {
+    "vercel": "UNKNOWN",
+    "supabase": "UNKNOWN",
+    "migrations": "manual-review"
+  },
+  "recovery_reference": null,
+  "evidence": {},
+  "status": "INSPECTED",
+  "blockers": [],
+  "created_at": "2026-10-01T13:44:42.227Z",
+  "updated_at": "2026-10-01T13:44:42.228Z",
+  "events": [
+    {
+      "event": "INSPECTED",
+      "key": "57a638fe0914fae212a88fc4287443d00825573d",
+      "at": "2026-10-01T13:44:42.228Z"
+    }
+  ]
+}

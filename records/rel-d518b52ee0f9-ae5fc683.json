@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "release_id": "rel-d518b52ee0f9-ae5fc683",
+  "candidate_sha": "d518b52ee0f9dc17976731af9391759463534f7f",
+  "base_sha": "39373c657589f46673c2563c03879b7201e8bd30",
+  "policy_sha": "253a3d7e597a49c40c366e28b12a41a59afc1418a319b54cde60b0702f10f09a",
+  "tree_sha": "524b050e573e81171328eefedebfbd318945f93e",
+  "domains": [
+    "Commerce",
+    "Customer UX/PWA",
+    "Platform/DB/Edge",
+    "Pricing"
+  ],
+  "capabilities": [
+    "pricing",
+    "release_policy",
+    "student_price",
+    "web"
+  ],
+  "risk_floor": "HIGH",
+  "urgency": "normal",
+  "decision": "CLASSIFIED",
+  "reasons": [
+    "server pricing or entitlement"
+  ],
+  "affected_edge_functions": [],
+  "edge_manifest": {},
+  "invariants": {
+    "price.server_authoritative": {
+      "status": "required"
+    },
+    "release.identity_exact": {
+      "status": "required"
+    },
+    "release.stage_identity_exact": {
+      "status": "required"
+    },
+    "studentpris.member_matrix": {
+      "status": "required"
+    },
+    "open_play.inverse": {
+      "status": "required"
+    },
+    "studentpris.admin_save_reload": {
+      "status": "required"
+    },
+    "stripe.test_amount": {
+      "status": "required"
+    }
+  },
+  "stage": null,
+  "intended_production": {
+    "vercel": "UNKNOWN",
+    "supabase": "UNKNOWN",
+    "migrations": "manual-review"
+  },
+  "recovery_reference": null,
+  "evidence": {},
+  "status": "INSPECTED",
+  "blockers": [],
+  "created_at": "2026-10-01T16:21:52.219Z",
+  "updated_at": "2026-10-01T16:21:52.220Z",
+  "events": [
+    {
+      "event": "INSPECTED",
+      "key": "d518b52ee0f9dc17976731af9391759463534f7f",
+      "at": "2026-10-01T16:21:52.220Z"
+    }
+  ]
+}

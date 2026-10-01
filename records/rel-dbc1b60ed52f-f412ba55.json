@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "release_id": "rel-dbc1b60ed52f-f412ba55",
+  "candidate_sha": "dbc1b60ed52f1c37bfca8ca224d8c107acceff97",
+  "base_sha": "39373c657589f46673c2563c03879b7201e8bd30",
+  "policy_sha": "64eb459035d29db8fea0c9c30e556dad8e50825756a949ac7a659142a327efac",
+  "tree_sha": "837de36525d7c21b28843010738eb67cea39a044",
+  "domains": [
+    "Platform/DB/Edge"
+  ],
+  "capabilities": [
+    "release_policy"
+  ],
+  "risk_floor": "HOTFIX",
+  "urgency": "normal",
+  "decision": "CLASSIFIED",
+  "reasons": [],
+  "affected_edge_functions": [],
+  "edge_manifest": {},
+  "invariants": {
+    "release.identity_exact": {
+      "status": "passed",
+      "exit_code": 0,
+      "log_sha256": "e0ee6fa4a7dd15d8aa09b1d0c99f3ee2c306b51ee4be8197439b5a9609245d89",
+      "at": "2026-10-01T14:52:34.684Z"
+    },
+    "release.stage_identity_exact": {
+      "status": "blocked",
+      "reason": "Shared Stage serves Storefront and autoassigns main; existing isolated Studentpris branch has MIGRATIONS_FAILED operation status, no Stripe secret and no public synthetic venue. No safe real checkout target is currently verified."
+    }
+  },
+  "stage": null,
+  "intended_production": {
+    "vercel": "UNKNOWN",
+    "supabase": "UNKNOWN",
+    "migrations": "manual-review"
+  },
+  "recovery_reference": null,
+  "evidence": {},
+  "status": "BLOCKED",
+  "blockers": [
+    "release.stage_identity_exact: blocked (Shared Stage serves Storefront and autoassigns main; existing isolated Studentpris branch has MIGRATIONS_FAILED operation status, no Stripe secret and no public synthetic venue. No safe real checkout target is currently verified.)"
+  ],
+  "created_at": "2026-10-01T14:52:26.505Z",
+  "updated_at": "2026-10-01T14:52:34.755Z",
+  "events": [
+    {
+      "event": "INSPECTED",
+      "key": "dbc1b60ed52f1c37bfca8ca224d8c107acceff97",
+      "at": "2026-10-01T14:52:26.506Z"
+    },
+    {
+      "event": "BLOCKED",
+      "key": "stage-target",
+      "at": "2026-10-01T14:52:27.190Z",
+      "reason": "Shared Stage serves Storefront and autoassigns main; existing isolated Studentpris branch has MIGRATIONS_FAILED operation status, no Stripe secret and no public synthetic venue. No safe real checkout target is currently verified."
+    },
+    {
+      "event": "EVIDENCE",
+      "key": "release.identity_exact",
+      "at": "2026-10-01T14:52:34.686Z",
+      "invariant": "release.identity_exact",
+      "status": "passed",
+      "digest": "e0ee6fa4a7dd15d8aa09b1d0c99f3ee2c306b51ee4be8197439b5a9609245d89"
+    },
+    {
+      "event": "VERIFIED",
+      "key": "cd65fb545ba29ca6d8cd09bdf187bced255ab2340f172c8c8048e1748455959f",
+      "at": "2026-10-01T14:52:34.755Z",
+      "status": "BLOCKED"
+    }
+  ]
+}
