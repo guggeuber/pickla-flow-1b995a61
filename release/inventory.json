@@ -1,10 +1,148 @@
 {
   "schema_version": 1,
-  "observed_at": "2026-10-01T13:38:41Z",
-  "canonical_main": { "sha": "39373c657589f46673c2563c03879b7201e8bd30", "source": "git fetch origin main; git ls-remote origin refs/heads/main" },
-  "github": { "repo": "guggeuber/pickla-flow-1b995a61", "visibility": "UNKNOWN", "plan": "UNKNOWN", "rulesets": "UNKNOWN", "branch_protection": "UNKNOWN", "actions_permissions": "UNKNOWN", "environments": "UNKNOWN", "secret_names": "UNKNOWN", "workflows": [], "source": "gh auth status: invalid token; api.github.com DNS unavailable; canonical tree has no .github/workflows" },
-  "vercel": { "projects": [ { "role": "production", "id": "UNKNOWN", "git_connection": "UNKNOWN", "production_branch": "UNKNOWN", "create_deployments": "UNKNOWN", "autoassign": "UNKNOWN", "aliases": "UNKNOWN", "deploy_hooks": "UNKNOWN", "served_release": "UNKNOWN" }, { "role": "shared_stage", "id": "UNKNOWN", "git_connection": "UNKNOWN", "production_branch": "UNKNOWN", "create_deployments": "UNKNOWN", "autoassign": "UNKNOWN", "aliases": "UNKNOWN", "deploy_hooks": "UNKNOWN", "served_release": "UNKNOWN" }, { "role": "third_relevant_project", "id": "UNKNOWN", "git_connection": "UNKNOWN", "production_branch": "UNKNOWN", "create_deployments": "UNKNOWN", "autoassign": "UNKNOWN", "aliases": "UNKNOWN", "deploy_hooks": "UNKNOWN", "served_release": "UNKNOWN" } ], "source": "Vercel control plane unavailable; playpickla.com and stage.playpickla.com DNS unavailable" },
-  "supabase": { "production": { "ref": "ptnvhbniiiapzbyofctg", "status": "ACTIVE_HEALTHY", "git_integration": "UNKNOWN", "deploy_to_production": "UNKNOWN", "migration_ledger": "UNKNOWN", "edge_versions": "UNKNOWN" }, "shared_stage": { "ref": "UNKNOWN", "ownership": "UNKNOWN", "git_integration": "UNKNOWN", "migration_ledger": "UNKNOWN", "edge_versions": "UNKNOWN" }, "source": "supabase projects list --output json (one project); functions list failed on local telemetry permission; migration list requires linked DB credentials" },
-  "routes": { "vercel_git": "UNKNOWN", "vercel_autoassign": "UNKNOWN", "vercel_hooks": "UNKNOWN", "supabase_github": "UNKNOWN", "manual_cli": "PRESENT", "production_exclusive": false },
-  "local_gates": { "prod_check": "Vitest plus source assertions plus build/PWA identity artifact checks; no live checkout or Stage behavior", "edge_plan": "shared CORS browser consumer source selection only", "migrations": "SQL files and manual apply; ledger unverified", "stripe_test": "mocked tests found; isolated real checkout unverified", "release_identity": "generated build identity plus dynamic /api/release source; served identity unverified", "cors": "source contract gate; live gate available but not run", "ops": "ops-agent-check source checks" }
+  "observed_at": "2026-10-01T14:28:25Z",
+  "canonical_main": {
+    "sha": "39373c657589f46673c2563c03879b7201e8bd30",
+    "source": "git fetch origin main; git ls-remote origin refs/heads/main"
+  },
+  "github": {
+    "repo": "guggeuber/pickla-flow-1b995a61",
+    "visibility": "public",
+    "plan": "UNKNOWN",
+    "rulesets": [],
+    "branch_protection": {
+      "main": false
+    },
+    "actions_permissions": {
+      "enabled": true,
+      "allowed_actions": "all",
+      "sha_pinning_required": false
+    },
+    "environments": [
+      {
+        "name": "Preview – pickla-flow-1b995a61",
+        "approval_rules": []
+      },
+      {
+        "name": "Preview – pickla-mail-v1-edde736",
+        "approval_rules": []
+      },
+      {
+        "name": "Preview – pickla-stage",
+        "approval_rules": []
+      },
+      {
+        "name": "Production",
+        "approval_rules": []
+      },
+      {
+        "name": "Production – pickla-flow-1b995a61",
+        "approval_rules": []
+      },
+      {
+        "name": "Production – pickla-mail-v1-edde736",
+        "approval_rules": []
+      },
+      {
+        "name": "Production – pickla-stage",
+        "approval_rules": []
+      }
+    ],
+    "secret_names": [],
+    "workflows": [],
+    "source": "gh api repo, branches/main, rulesets, actions/permissions, actions/secrets, environments, workflows at 2026-10-01T13:47Z; account plan query unavailable"
+  },
+  "vercel": {
+    "projects": [
+      {
+        "role": "production",
+        "id": "UNKNOWN",
+        "git_connection": "UNKNOWN",
+        "production_branch": "UNKNOWN",
+        "create_deployments": "UNKNOWN",
+        "autoassign": "UNKNOWN",
+        "aliases": "UNKNOWN",
+        "deploy_hooks": "UNKNOWN",
+        "served_release": {
+          "sha": "39373c657589f46673c2563c03879b7201e8bd30",
+          "deployment_id": "dpl_Epaqm5bfxK9ebKyP3h1fYxEBHUWj",
+          "built_at": "2026-09-26T13:01:58.769Z"
+        },
+        "alias": "playpickla.com"
+      },
+      {
+        "role": "shared_stage",
+        "id": "UNKNOWN",
+        "git_connection": "UNKNOWN",
+        "production_branch": "UNKNOWN",
+        "create_deployments": "UNKNOWN",
+        "autoassign": "UNKNOWN",
+        "aliases": "UNKNOWN",
+        "deploy_hooks": "UNKNOWN",
+        "served_release": {
+          "sha": "200b5fe15cbb4174c6a44ef0250e1d55b12e745f",
+          "deployment_id": "dpl_BBjGz3Ht4D1PS2bA9ZhMLCu3c41D",
+          "built_at": "2026-09-23T03:26:32.873Z"
+        },
+        "alias": "stage.playpickla.com"
+      },
+      {
+        "role": "mail",
+        "id": "UNKNOWN",
+        "git_connection": "UNKNOWN",
+        "production_branch": "UNKNOWN",
+        "create_deployments": "UNKNOWN",
+        "autoassign": "UNKNOWN",
+        "aliases": "UNKNOWN",
+        "deploy_hooks": "UNKNOWN",
+        "served_release": "UNKNOWN",
+        "alias": "UNKNOWN"
+      }
+    ],
+    "source": "correlated GET /api/release?request_id=picklaReleaseInventory20261001 on production and shared Stage at 2026-10-01T13:47Z; Vercel management API unavailable; third project from historical release register only, not verified current"
+  },
+  "supabase": {
+    "production": {
+      "ref": "ptnvhbniiiapzbyofctg",
+      "status": "ACTIVE_HEALTHY",
+      "git_integration": "UNKNOWN",
+      "deploy_to_production": "UNKNOWN",
+      "migration_ledger": "UNKNOWN",
+      "edge_versions": {
+        "api-admin": 83,
+        "api-bookings": 87,
+        "api-commerce": 44,
+        "api-courses": 28,
+        "api-event-public": 74,
+        "api-leagues": 17,
+        "api-stripe": 24,
+        "api-stripe-webhook": 52
+      }
+    },
+    "shared_stage": {
+      "ref": "UNKNOWN",
+      "ownership": "UNKNOWN",
+      "git_integration": "UNKNOWN",
+      "migration_ledger": "UNKNOWN",
+      "edge_versions": "UNKNOWN"
+    },
+    "source": "supabase projects list and functions list --project-ref ptnvhbniiiapzbyofctg at 2026-10-01T13:47Z (one accessible production project); Stage not visible to current account; migration ledger not accessed"
+  },
+  "routes": {
+    "vercel_git": "UNKNOWN",
+    "vercel_autoassign": "UNKNOWN",
+    "vercel_hooks": "UNKNOWN",
+    "supabase_github": "UNKNOWN",
+    "manual_cli": "PRESENT",
+    "production_exclusive": false
+  },
+  "local_gates": {
+    "prod_check": "Vitest plus source assertions plus build/PWA identity artifact checks; no live checkout or Stage behavior",
+    "edge_plan": "shared CORS browser consumer source selection only",
+    "migrations": "SQL files and manual apply; ledger unverified",
+    "stripe_test": "mocked tests found; isolated real checkout unverified",
+    "release_identity": "generated build identity plus dynamic /api/release source; served identity unverified",
+    "cors": "source contract gate; live gate available but not run",
+    "ops": "ops-agent-check source checks"
+  }
 }
