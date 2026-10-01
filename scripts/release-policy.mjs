@@ -48,6 +48,10 @@ export function classify(paths, options = {}) {
   const graph = options.graph || { consumers: {}, unknown: [] };
   const affectedEdge = new Set();
   for (const path of paths) {
+    if (/^(release\/|docs\/|\.github\/|scripts\/release-|scripts\/pickla-release)/.test(path)) {
+      add(domains, "Platform/DB/Edge"); add(capabilities, "release_policy");
+      continue;
+    }
     if (/^supabase\/migrations\//.test(path)) { add(domains, "Platform/DB/Edge", "Identity/Auth/RLS"); add(capabilities, "migration", "rls"); raise("CRITICAL", "database migration"); }
     if (/^supabase\/functions\//.test(path)) {
       add(domains, "Platform/DB/Edge"); add(capabilities, "edge");

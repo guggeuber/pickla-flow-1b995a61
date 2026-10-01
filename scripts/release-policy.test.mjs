@@ -33,3 +33,10 @@ test("unknown Edge consumer needs review", () => {
   const { result } = select(["supabase/functions/_shared/not-imported.ts"]);
   assert.equal(result.decision, "NEEDS_REVIEW");
 });
+
+test("release inventory and policy do not imply capacity changes", () => {
+  const { result, ids } = select(["release/inventory.json", "scripts/release-policy.mjs"]);
+  assert.deepEqual(result.domains, ["Platform/DB/Edge"]);
+  assert.deepEqual(result.capabilities, ["release_policy"]);
+  assert.deepEqual(ids, ["release.identity_exact", "release.stage_identity_exact"]);
+});
