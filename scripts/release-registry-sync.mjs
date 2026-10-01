@@ -16,10 +16,10 @@ try {
   for (let attempt = 0; attempt < 5; attempt++) {
     const remote = git(["ls-remote", "origin", `refs/heads/${branch}`]).split("\t")[0];
     if (remote) {
-      git(["fetch", "origin", `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
       if (!existsSync(join(work, ".git"))) git(["clone", "--no-checkout", "--shared", root, work]);
       git(["remote", "set-url", "origin", originUrl], work);
-      git(["checkout", "-B", branch, `origin/${branch}`], work);
+      git(["fetch", "origin", `refs/heads/${branch}`], work);
+      git(["checkout", "-B", branch, "FETCH_HEAD"], work);
     } else {
       if (!existsSync(join(work, ".git"))) git(["clone", "--no-checkout", "--shared", root, work]);
       git(["remote", "set-url", "origin", originUrl], work);
@@ -28,12 +28,16 @@ try {
     }
     mkdirSync(join(work, "records"), { recursive: true });
     for (const name of readdirSync(local).filter((value) => value.endsWith(".json"))) {
-      const source = JSON.parse(readFileSync(join(local, name)));
+      let source = JSON.parse(readFileSync(join(local, name)));
       const target = join(work, "records", name);
       if (existsSync(target)) {
         const previous = JSON.parse(readFileSync(target));
         if (previous.candidate_sha !== source.candidate_sha) throw new Error("registry candidate collision");
         const oldKeys = new Set(previous.events.map((value) => `${value.event}:${value.key}`));
+        if (previous.updated_at > source.updated_at) {
+          if (source.events.some((value) => !oldKeys.has(`${value.event}:${value.key}`))) throw new Error("stale local register with unsynced events; reload and retry");
+          source = previous;
+        }
         source.events = [...previous.events, ...source.events.filter((value) => !oldKeys.has(`${value.event}:${value.key}`))];
       }
       writeFileSync(target, JSON.stringify(source, null, 2) + "\n");

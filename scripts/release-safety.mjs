@@ -29,6 +29,10 @@ export function validateStripeTest(session) {
   return null;
 }
 
+export function missingStageCredentials(env) {
+  return ["STAGE_VERCEL_TOKEN", "STAGE_SUPABASE_ACCESS_TOKEN", "STRIPE_TEST_SECRET_KEY"].filter((name) => !env[name]);
+}
+
 export function withStageLock(path, action) {
   let fd;
   try { fd = openSync(path, "wx"); } catch { throw new Error("Stage target already locked"); }

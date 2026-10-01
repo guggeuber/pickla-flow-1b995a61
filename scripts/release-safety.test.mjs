@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { routingPreflight, validateTarget, validateReady, validateStripeTest, withStageLock } from "./release-safety.mjs";
+import { routingPreflight, validateTarget, validateReady, validateStripeTest, missingStageCredentials, withStageLock } from "./release-safety.mjs";
 
 test("competing route blocks promotion", () => {
   assert.equal(routingPreflight({ routes: { vercel_git: "ENABLED", vercel_autoassign: "DISABLED", vercel_hooks: "DISABLED", supabase_github: "DISABLED" } }, { owner: "x", vercel_project_id: "p", supabase_ref: "s" }).ready, false);
@@ -28,4 +28,10 @@ test("two Stage runs cannot own local target lock", () => {
   const dir = mkdtempSync(join(tmpdir(), "pickla-lock-test-"));
   try { withStageLock(join(dir, "stage.lock"), () => assert.throws(() => withStageLock(join(dir, "stage.lock"), () => {}), /already locked/)); }
   finally { rmSync(dir, { recursive: true, force: true }); }
+});
+test("missing Stage credential reports names only", () => {
+  const value = "sk_test_do_not_print";
+  const missing = missingStageCredentials({ STRIPE_TEST_SECRET_KEY: value });
+  assert.deepEqual(missing, ["STAGE_VERCEL_TOKEN", "STAGE_SUPABASE_ACCESS_TOKEN"]);
+  assert.ok(!JSON.stringify(missing).includes(value));
 });

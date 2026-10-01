@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { digest, edgeGraph, classify, selectInvariants, gitDiffPaths } from "./release-policy.mjs";
-import { routingPreflight, validateTarget, withStageLock } from "./release-safety.mjs";
+import { routingPreflight, validateTarget, missingStageCredentials, withStageLock } from "./release-safety.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const policyBytes = readFileSync(join(root, "release/policy.json"));
@@ -95,6 +95,9 @@ function stage(id) {
 function stageLocked(record, id) {
   const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage" && value.owner && value.supabase_ref && value.vercel_project_id && value.alias);
   if (!target) { record.status = "BLOCKED"; record.blockers = ["isolated Stage target unavailable"]; save(record, "BLOCKED", { key: "stage-target", reason: record.blockers[0] }); console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers, required_action: "Provision a dedicated Vercel project and Supabase project with explicit owner, project IDs/ref, isolated aliases, test credentials and verified deployment routing; add them to release/stage-targets.json on main." })); return; }
+  if (inventory.github?.branch_protection?.main !== true) fail("trusted main policy unavailable: main branch has no verified protection");
+  const missing = missingStageCredentials(process.env);
+  if (missing.length) fail(`Stage credentials unavailable: ${missing.join(", ")}`);
   const preflight = routingPreflight(inventory, target);
   if (!preflight.ready) fail(`routing preflight: ${preflight.blockers.join("; ")}`);
   const targetError = validateTarget(target, target.current_identity);
