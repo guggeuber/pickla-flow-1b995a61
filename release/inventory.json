@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at": "2026-10-01T14:28:25Z",
+  "observed_at": "2026-10-01T14:50:26Z",
   "canonical_main": {
     "sha": "39373c657589f46673c2563c03879b7201e8bd30",
     "source": "git fetch origin main; git ls-remote origin refs/heads/main"
@@ -72,19 +72,20 @@
       },
       {
         "role": "shared_stage",
-        "id": "UNKNOWN",
-        "git_connection": "VERIFIED: GitHub PR #4 produces Vercel preview status for this project",
-        "production_branch": "UNKNOWN",
+        "id": "prj_UpeWrQfUsTKcYETcIy08PmzeCP1s",
+        "git_connection": "VERIFIED: guggeuber/pickla-flow-1b995a61",
+        "production_branch": "main",
         "create_deployments": "VERIFIED: PR preview deployment triggered automatically",
-        "autoassign": "UNKNOWN",
+        "autoassign": true,
         "aliases": "UNKNOWN",
-        "deploy_hooks": "UNKNOWN",
+        "deploy_hooks": [],
         "served_release": {
           "sha": "200b5fe15cbb4174c6a44ef0250e1d55b12e745f",
           "deployment_id": "dpl_BBjGz3Ht4D1PS2bA9ZhMLCu3c41D",
           "built_at": "2026-09-23T03:26:32.873Z"
         },
-        "alias": "stage.playpickla.com"
+        "alias": "stage.playpickla.com",
+        "owner": "gunnar-picklaat's projects (Hobby)"
       },
       {
         "role": "mail",
@@ -99,7 +100,7 @@
         "alias": "UNKNOWN"
       }
     ],
-    "source": "correlated GET /api/release?request_id=picklaReleaseInventory20261001 on production and shared Stage at 2026-10-01T13:47Z; Vercel management API unavailable; third project from historical release register only, not verified current; GitHub PR #4 statusCheckRollup at 2026-10-01T14:34Z shows preview deployments for all three projects; production branch, autoassign and hooks still UNKNOWN"
+    "source": "correlated GET /api/release?request_id=picklaReleaseInventory20261001 on production and shared Stage at 2026-10-01T13:47Z; Vercel management API unavailable; third project from historical release register only, not verified current; GitHub PR #4 statusCheckRollup at 2026-10-01T14:34Z shows preview deployments for all three projects; production branch, autoassign and hooks still UNKNOWN; authenticated Vercel project settings read-only on 2026-10-01: project ID, owner, Git connection, no deploy hooks, production branch main, autoassign ON"
   },
   "supabase": {
     "production": {
@@ -120,18 +121,57 @@
       }
     },
     "shared_stage": {
-      "ref": "UNKNOWN",
-      "ownership": "UNKNOWN",
+      "ref": "anpxxnpevtxhiajxmfji",
+      "ownership": {
+        "parent_ref": "ptnvhbniiiapzbyofctg",
+        "parent_organization_id": "ynizqjnrxwljfedoyiid",
+        "branch_name": "stage",
+        "persistent": true
+      },
       "git_integration": "UNKNOWN",
       "migration_ledger": "UNKNOWN",
-      "edge_versions": "UNKNOWN"
+      "edge_versions": {
+        "api-admin": 91,
+        "api-bookings": 92,
+        "api-commerce": 56,
+        "api-event-public": 77,
+        "api-stripe": 29,
+        "api-stripe-webhook": 58
+      },
+      "status": "MIGRATIONS_FAILED",
+      "preview_project_status": "ACTIVE_HEALTHY",
+      "with_data": false,
+      "stripe_secret_name_present": true,
+      "public_test_venue": "404 for solna and pickla-arena-sthlm"
     },
-    "source": "supabase projects list and functions list --project-ref ptnvhbniiiapzbyofctg at 2026-10-01T13:47Z (one accessible production project); Stage not visible to current account; migration ledger not accessed"
+    "source": "supabase branches list --project-ref ptnvhbniiiapzbyofctg, functions list and secrets list with explicit branch refs, and public-venue HTTP checks on 2026-10-01; status MIGRATIONS_FAILED is branch operation metadata, not proof of current schema defect",
+    "isolated_student_test_branch": {
+      "ref": "byuwuoivuuklcwmoesrx",
+      "ownership": {
+        "parent_ref": "ptnvhbniiiapzbyofctg",
+        "parent_organization_id": "ynizqjnrxwljfedoyiid",
+        "branch_name": "student-pricing-hotfix-test-20260926",
+        "persistent": false
+      },
+      "status": "MIGRATIONS_FAILED",
+      "preview_project_status": "ACTIVE_HEALTHY",
+      "with_data": false,
+      "stripe_secret_name_present": false,
+      "public_test_venue": "404 for solna and pickla-arena-sthlm",
+      "edge_versions": {
+        "api-admin": 84,
+        "api-bookings": 87,
+        "api-commerce": 44,
+        "api-event-public": 74,
+        "api-stripe": 24,
+        "api-stripe-webhook": 53
+      }
+    }
   },
   "routes": {
     "vercel_git": "ENABLED_PREVIEW",
-    "vercel_autoassign": "UNKNOWN",
-    "vercel_hooks": "UNKNOWN",
+    "vercel_autoassign": "ENABLED_SHARED_STAGE",
+    "vercel_hooks": "NONE_SHARED_STAGE; OTHER_PROJECTS_UNKNOWN",
     "supabase_github": "UNKNOWN",
     "manual_cli": "PRESENT",
     "production_exclusive": false
@@ -144,5 +184,10 @@
     "release_identity": "generated build identity plus dynamic /api/release source; served identity unverified",
     "cors": "source contract gate; live gate available but not run",
     "ops": "ops-agent-check source checks"
+  },
+  "isolated_stage_decision": {
+    "status": "BLOCKED",
+    "reason": "Shared Stage serves Storefront and autoassigns main; existing isolated Studentpris branch has MIGRATIONS_FAILED operation status, no Stripe secret and no public synthetic venue. No safe real checkout target is currently verified.",
+    "minimum_action": "Rehabilitate the existing isolated Studentpris branch: resolve/verify migration state, seed synthetic venue plus Studentpris and normal Open Play occurrences, wire a dedicated Stripe TEST key to that branch and a trusted GitHub Stage environment, and bind an immutable Vercel preview deployment to this branch without assigning stage.playpickla.com. Verify project ownership and exact identities before any deploy."
   }
 }
