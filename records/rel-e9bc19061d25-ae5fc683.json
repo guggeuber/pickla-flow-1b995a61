@@ -64,7 +64,14 @@
     "migrations": "manual-review"
   },
   "recovery_reference": null,
-  "evidence": {},
+  "evidence": {
+    "security": {
+      "isolated_branch_credentials_exposed_to_tool_output": true,
+      "production_credentials_exposed": false,
+      "shared_stage_credentials_exposed": false,
+      "values_recorded": false
+    }
+  },
   "status": "BLOCKED",
   "blockers": [
     "trusted-main Stage runner unavailable: protected main does not yet contain Release V1 policy and workflow",
@@ -73,10 +80,11 @@
     "studentpris.member_matrix: blocked (exact-SHA isolated preview not staged)",
     "open_play.inverse: blocked (exact-SHA isolated preview not staged)",
     "studentpris.admin_save_reload: blocked (exact-SHA isolated preview not staged)",
-    "stripe.test_amount: blocked (real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured)"
+    "stripe.test_amount: blocked (real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured)",
+    "isolated test branch credentials appeared in tool output; rotate branch-only credentials before certification"
   ],
   "created_at": "2026-10-01T16:41:56.733Z",
-  "updated_at": "2026-10-01T16:42:32.075Z",
+  "updated_at": "2026-10-01T16:46:34.728Z",
   "events": [
     {
       "event": "INSPECTED",
@@ -102,6 +110,12 @@
       "key": "cff7964d7e11df0673209d0f17e940af8f88564e18c933254f1b8cdaa2ff7f51",
       "at": "2026-10-01T16:42:32.075Z",
       "status": "BLOCKED"
+    },
+    {
+      "event": "SECURITY_BLOCKED",
+      "key": "isolated-branch-credential-rotation",
+      "reason": "isolated test branch credentials appeared in tool output; rotate branch-only credentials before certification",
+      "at": "2026-10-01T16:46:34.727Z"
     }
   ]
 }
