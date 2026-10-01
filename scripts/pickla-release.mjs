@@ -94,7 +94,14 @@ function stage(id) {
 }
 function stageLocked(record, id) {
   const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage" && value.owner && value.supabase_ref && value.vercel_project_id && value.alias);
-  if (!target) { record.status = "BLOCKED"; record.blockers = ["isolated Stage target unavailable"]; save(record, "BLOCKED", { key: "stage-target", reason: record.blockers[0] }); console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers, required_action: "Provision a dedicated Vercel project and Supabase project with explicit owner, project IDs/ref, isolated aliases, test credentials and verified deployment routing; add them to release/stage-targets.json on main." })); return; }
+  if (!target) {
+    const decision = inventory.isolated_stage_decision;
+    record.status = "BLOCKED";
+    record.blockers = [decision?.reason || "isolated Stage target unavailable"];
+    save(record, "BLOCKED", { key: "stage-target", reason: record.blockers[0] });
+    console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers, required_action: decision?.minimum_action || "Provision and verify an isolated Stage target." }));
+    return;
+  }
   if (inventory.github?.branch_protection?.main !== true) fail("trusted main policy unavailable: main branch has no verified protection");
   const missing = missingStageCredentials(process.env);
   if (missing.length) fail(`Stage credentials unavailable: ${missing.join(", ")}`);
@@ -124,7 +131,7 @@ function verify(id) {
       save(record, "EVIDENCE", { key: item.id, invariant: item.id, status: record.invariants[item.id].status, digest: digest(log) });
     }
   } finally { rmSync(temp, { recursive: true, force: true }); }
-  for (const item of policy.invariants.filter((value) => record.invariants[value.id] && value.environment === "isolated_stage")) record.invariants[item.id] = { status: "blocked", reason: "isolated Stage target unavailable" };
+  for (const item of policy.invariants.filter((value) => record.invariants[value.id] && value.environment === "isolated_stage")) record.invariants[item.id] = { status: "blocked", reason: inventory.isolated_stage_decision?.reason || "isolated Stage target unavailable" };
   record.blockers = Object.entries(record.invariants).filter(([, value]) => value.status !== "passed").map(([key, value]) => `${key}: ${value.status}${value.reason ? ` (${value.reason})` : ""}`);
   record.status = record.blockers.length ? "BLOCKED" : "READY";
   save(record, "VERIFIED", { key: digest(JSON.stringify(record.invariants)), status: record.status });
