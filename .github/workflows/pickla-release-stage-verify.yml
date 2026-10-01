@@ -14,6 +14,7 @@ concurrency:
 jobs:
   stage_verify:
     runs-on: ubuntu-latest
+    environment: pickla-release-certification
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -27,11 +28,23 @@ jobs:
           git fetch origin refs/heads/pickla-release-registry:refs/remotes/origin/pickla-release-registry
           mkdir -p .pickla-release-v1
           git show "origin/pickla-release-registry:records/${RELEASE_ID}.json" > ".pickla-release-v1/${RELEASE_ID}.json"
-      - name: Verify local evidence and report Stage blocker
-        env:
-          RELEASE_ID: ${{ inputs.release_id }}
+      - name: Install trusted harness dependencies
         run: |
           npm ci --ignore-scripts
+          command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
+      - name: Stage exact isolated candidate
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
+        run: |
           node scripts/pickla-release.mjs stage "$RELEASE_ID"
+      - name: Verify isolated evidence
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
+          STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+        run: |
           node scripts/pickla-release.mjs verify "$RELEASE_ID"
           node scripts/release-registry-sync.mjs

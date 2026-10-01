@@ -24,7 +24,7 @@
     "intended_production": { "type": "object" },
     "recovery_reference": { "type": ["string", "null"] },
     "evidence": { "type": "object" },
-    "status": { "enum": ["INSPECTED", "BLOCKED", "READY"] },
+    "status": { "enum": ["INSPECTED", "BLOCKED", "READY_FOR_APPROVAL"] },
     "blockers": { "type": "array", "items": { "type": "string" } },
     "events": { "type": "array", "items": { "type": "object", "required": ["event", "at"] } },
     "created_at": { "type": "string", "format": "date-time" },

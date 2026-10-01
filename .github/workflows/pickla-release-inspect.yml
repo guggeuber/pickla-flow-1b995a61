@@ -24,6 +24,7 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git fetch origin "$CANDIDATE_SHA"
           node scripts/pickla-release.mjs inspect "$CANDIDATE_SHA"
           node scripts/release-registry-sync.mjs

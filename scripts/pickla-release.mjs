@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { digest, edgeGraph, classify, selectInvariants, gitDiffPaths } from "./release-policy.mjs";
-import { routingPreflight, validateTarget, missingStageCredentials, withStageLock } from "./release-safety.mjs";
+import { validateTarget, isolatedStagePreflight, withStageLock } from "./release-safety.mjs";
+import { withIsolatedTargetLock } from "./release-isolated-lock.mjs";
+import { discoverExactPreview } from "./release-isolated-preview.mjs";
+import { verifyIsolatedBranch } from "./release-isolated-supabase.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const policyBytes = readFileSync(join(root, "release/policy.json"));
@@ -90,27 +93,43 @@ function stage(id) {
   if (dirty()) fail("dirty runner checkout");
   const stageLock = join(registryDir, "isolated-stage.lock");
   mkdirSync(registryDir, { recursive: true });
-  return withStageLock(stageLock, () => stageLocked(record, id));
+  return withStageLock(stageLock, () => withIsolatedTargetLock(root, id, () => stageLocked(record, id)));
 }
 function stageLocked(record, id) {
-  const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage" && value.owner && value.supabase_ref && value.vercel_project_id && value.alias);
+  const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage" && value.owner && value.supabase_ref && value.vercel_project_id && value.preview_git_branch);
+  const blocked = (key, reason) => {
+    record.status = "BLOCKED";
+    record.blockers = [reason];
+    save(record, "BLOCKED", { key, reason });
+    console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers }));
+  };
   if (!target) {
     const decision = inventory.isolated_stage_decision;
-    record.status = "BLOCKED";
-    record.blockers = [decision?.reason || "isolated Stage target unavailable"];
-    save(record, "BLOCKED", { key: "stage-target", reason: record.blockers[0] });
-    console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers, required_action: decision?.minimum_action || "Provision and verify an isolated Stage target." }));
-    return;
+    return blocked("stage-target", decision?.reason || "isolated Stage target unavailable");
   }
-  if (inventory.github?.branch_protection?.main !== true) fail("trusted main policy unavailable: main branch has no verified protection");
-  const missing = missingStageCredentials(process.env);
-  if (missing.length) fail(`Stage credentials unavailable: ${missing.join(", ")}`);
-  const preflight = routingPreflight(inventory, target);
-  if (!preflight.ready) fail(`routing preflight: ${preflight.blockers.join("; ")}`);
-  const targetError = validateTarget(target, target.current_identity);
-  if (targetError) fail(targetError);
-  // V1 never infers a target from supabase/config.toml, CLI links, or env vars.
-  fail("Stage deploy adapter requires verified control-plane routing and target identity");
+  const preflight = isolatedStagePreflight(inventory, target);
+  if (!preflight.ready) return blocked("stage-routing", `isolated routing preflight: ${preflight.blockers.join("; ")}`);
+  if (inventory.github?.branch_protection?.main !== true || git(["rev-parse", "HEAD"]) !== record.base_sha) {
+    return blocked("trusted-main", "trusted-main Stage runner unavailable: protected main does not yet contain Release V1 policy and workflow");
+  }
+  if (record.affected_edge_functions.length) return blocked("edge-deploy", "candidate changes Edge functions; isolated Edge deployment/version adapter is not approved for this target");
+  if (!process.env.STAGE_VERCEL_TOKEN || !process.env.STAGE_SUPABASE_ACCESS_TOKEN) return blocked("stage-credentials", "Vercel or Supabase read credential unavailable in trusted main certification environment");
+  try {
+    const branch = verifyIsolatedBranch(target);
+    const preview = discoverExactPreview(target, record.candidate_sha);
+    const targetError = validateTarget(target, { ...preview, supabase_ref: branch.ref });
+    if (targetError) return blocked("stage-identity", targetError);
+    // The URL is an immutable Vercel deployment. Supabase is explicit and must
+    // be verified independently before any Edge or fixture mutation.
+    record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, fixture_venue_slug: target.fixture_venue_slug };
+    record.invariants["release.stage_identity_exact"] = { status: "passed", evidence_ref: `vercel:${preview.vercel_deployment_id}`, at: preview.verified_at };
+    record.status = "INSPECTED";
+    record.blockers = [];
+    save(record, "STAGED", { key: preview.vercel_deployment_id, deployment_id: preview.vercel_deployment_id, supabase_ref: target.supabase_ref });
+    console.log(JSON.stringify({ release_id: id, status: "STAGED", stage: record.stage }));
+  } catch (error) {
+    return blocked("stage-adapter", `exact-SHA preview unavailable: ${error.message}`);
+  }
 }
 function verify(id) {
   const record = load(id); mainGuard(record);
@@ -125,15 +144,39 @@ function verify(id) {
     symlinkSync(dependencyRoot, join(temp, "node_modules"), "dir");
     for (const item of local) {
       if (record.invariants[item.id].status === "passed") continue;
-      const result = spawnSync("sh", ["-c", item.command], { cwd: temp, env: { ...process.env, COMMIT_SHA: record.candidate_sha }, encoding: "utf8", timeout: item.timeout_seconds * 1000, maxBuffer: 4 * 1024 * 1024 });
+      const safeEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR || tmpdir(), CI: "true", COMMIT_SHA: record.candidate_sha };
+      const result = spawnSync("sh", ["-c", item.command], { cwd: temp, env: safeEnv, encoding: "utf8", timeout: item.timeout_seconds * 1000, maxBuffer: 4 * 1024 * 1024 });
       const log = `${result.stdout || ""}\n${result.stderr || ""}`;
       record.invariants[item.id] = { status: result.status === 0 ? "passed" : "failed", exit_code: result.status, log_sha256: digest(log), at: new Date().toISOString() };
       save(record, "EVIDENCE", { key: item.id, invariant: item.id, status: record.invariants[item.id].status, digest: digest(log) });
     }
   } finally { rmSync(temp, { recursive: true, force: true }); }
-  for (const item of policy.invariants.filter((value) => record.invariants[value.id] && value.environment === "isolated_stage")) record.invariants[item.id] = { status: "blocked", reason: inventory.isolated_stage_decision?.reason || "isolated Stage target unavailable" };
-  record.blockers = Object.entries(record.invariants).filter(([, value]) => value.status !== "passed").map(([key, value]) => `${key}: ${value.status}${value.reason ? ` (${value.reason})` : ""}`);
-  record.status = record.blockers.length ? "BLOCKED" : "READY";
+  const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage");
+  if (record.stage && target && inventory.github?.branch_protection?.main === true && git(["rev-parse", "HEAD"]) === record.base_sha && process.env.STAGE_VERCEL_TOKEN && process.env.STAGE_SUPABASE_ACCESS_TOKEN) {
+    try {
+      withStageLock(join(registryDir, "isolated-stage.lock"), () => withIsolatedTargetLock(root, id, () => {
+        const current = discoverExactPreview(target, record.candidate_sha);
+        if (current.vercel_deployment_id !== record.stage.vercel_deployment_id) throw new Error("staged Vercel identity changed");
+        const branch = verifyIsolatedBranch(target);
+        if (branch.ref !== record.stage.supabase_ref || branch.branch_id !== record.stage.supabase_branch_id) throw new Error("staged Supabase identity changed");
+        const evidence = JSON.parse(execFileSync("node", [join(root, "scripts/release-studentpris-harness.mjs"), "run"], { cwd: root, env: process.env, encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024 }));
+        record.evidence.studentpris = evidence;
+        for (const key of ["price.server_authoritative", "studentpris.member_matrix", "open_play.inverse", "studentpris.admin_save_reload"]) if (record.invariants[key]) record.invariants[key] = { status: "passed", evidence_ref: `record:evidence.studentpris#${evidence.sha256}`, at: evidence.observed_at };
+        save(record, "EVIDENCE", { key: evidence.sha256, scope: "isolated-studentpris", digest: evidence.sha256 });
+      }));
+    } catch (error) {
+      record.blockers = [`isolated deployed-behavior gate failed: ${error.message}`];
+      save(record, "BLOCKED", { key: "isolated-behavior", reason: record.blockers[0] });
+    }
+  }
+  for (const item of policy.invariants.filter((value) => record.invariants[value.id] && value.environment === "isolated_stage" && record.invariants[value.id].status !== "passed")) {
+    const reason = item.id === "stripe.test_amount"
+      ? "real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured"
+      : record.stage ? "trusted deployed-behavior evidence unavailable" : "exact-SHA isolated preview not staged";
+    record.invariants[item.id] = { status: "blocked", reason };
+  }
+  record.blockers = [...record.blockers.filter((value) => value.startsWith("isolated deployed-behavior gate failed:")), ...Object.entries(record.invariants).filter(([, value]) => value.status !== "passed").map(([key, value]) => `${key}: ${value.status}${value.reason ? ` (${value.reason})` : ""}`)];
+  record.status = record.blockers.length ? "BLOCKED" : "READY_FOR_APPROVAL";
   save(record, "VERIFIED", { key: digest(JSON.stringify(record.invariants)), status: record.status });
   console.log(JSON.stringify({ release_id: id, status: record.status, invariants: record.invariants, blockers: record.blockers }, null, 2));
 }

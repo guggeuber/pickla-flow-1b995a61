@@ -28,3 +28,4 @@ api/_release-identity.generated.json
 .env.local
 .vercel
 .env*
+supabase/.temp/

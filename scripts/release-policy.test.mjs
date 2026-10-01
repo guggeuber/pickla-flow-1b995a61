@@ -13,7 +13,7 @@ test("Studentpris historical diff selects pricing, admin, customer, and isolated
   const { result, ids } = select(paths);
   assert.equal(result.risk_floor, "HIGH");
   assert.deepEqual(result.edge_functions, ["api-bookings", "api-commerce", "api-courses", "api-event-public", "api-leagues"]);
-  assert.deepEqual(ids, ["price.server_authoritative", "release.identity_exact", "release.stage_identity_exact", "student.admin_save_reload", "student.customer_view", "student.stripe_test_59"]);
+  assert.deepEqual(ids, ["price.server_authoritative", "release.identity_exact", "release.stage_identity_exact", "studentpris.member_matrix", "open_play.inverse", "studentpris.admin_save_reload", "stripe.test_amount"]);
 });
 
 test("payment implementation, refund, and inventory select their own evidence", () => {

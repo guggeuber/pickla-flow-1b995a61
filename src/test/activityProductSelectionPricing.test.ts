@@ -123,6 +123,9 @@ describe("canonical activity product pricing", () => {
       online_price_sek: 165, day_pass_included: false, membership_included: false,
     });
     expect(activityInclusionPolicy(saved)).toEqual({ dayPassIncluded: true, membershipIncluded: true });
+    const nonMember = await priceFor(saved);
+    expect(nonMember.finalAmountSek).toBe(165);
+    expect(nonMember.requiresCheckout).toBe(true);
     const playPlus = await priceFor(saved, { membership: true, unlimited: true });
     expect(playPlus.finalAmountSek).toBe(0);
     expect(playPlus.accessDecision).toBe("membership_included");

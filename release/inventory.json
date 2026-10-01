@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at": "2026-10-01T14:50:26Z",
+  "observed_at": "2026-10-01T16:15:00Z",
   "canonical_main": {
     "sha": "39373c657589f46673c2563c03879b7201e8bd30",
     "source": "git fetch origin main; git ls-remote origin refs/heads/main"
@@ -46,23 +46,29 @@
       {
         "name": "Production – pickla-stage",
         "approval_rules": []
+      },
+      {
+        "name": "pickla-release-certification",
+        "approval_rules": [],
+        "branch_policy": "main only",
+        "secret_names": []
       }
     ],
     "secret_names": [],
     "workflows": [],
-    "source": "gh api repo, branches/main, rulesets, actions/permissions, actions/secrets, environments, workflows at 2026-10-01T13:47Z; account plan query unavailable"
+    "source": "gh api repo, branches/main, rulesets, actions/permissions, actions/secrets, environments, workflows at 2026-10-01T13:47Z; certification environment created with main-only branch policy at 2026-10-01T16:20Z; account plan query unavailable"
   },
   "vercel": {
     "projects": [
       {
         "role": "production",
-        "id": "UNKNOWN",
+        "id": "prj_ZXHb62NWhYVlIrj2yaEZekIxgJVV",
         "git_connection": "VERIFIED: GitHub PR #4 produces Vercel preview status for this project",
         "production_branch": "UNKNOWN",
         "create_deployments": "VERIFIED: PR preview deployment triggered automatically",
         "autoassign": "UNKNOWN",
         "aliases": "UNKNOWN",
-        "deploy_hooks": "UNKNOWN",
+        "deploy_hooks": [],
         "served_release": {
           "sha": "39373c657589f46673c2563c03879b7201e8bd30",
           "deployment_id": "dpl_Epaqm5bfxK9ebKyP3h1fYxEBHUWj",
@@ -100,7 +106,7 @@
         "alias": "UNKNOWN"
       }
     ],
-    "source": "correlated GET /api/release?request_id=picklaReleaseInventory20261001 on production and shared Stage at 2026-10-01T13:47Z; Vercel management API unavailable; third project from historical release register only, not verified current; GitHub PR #4 statusCheckRollup at 2026-10-01T14:34Z shows preview deployments for all three projects; production branch, autoassign and hooks still UNKNOWN; authenticated Vercel project settings read-only on 2026-10-01: project ID, owner, Git connection, no deploy hooks, production branch main, autoassign ON"
+    "source": "Read-only authenticated Vercel settings and CLI 62.1.0, GitHub PR #4 checks, served /api/release on 2026-10-01. Existing PR preview SHA dbc1b60 has deployment dpl_FXWmm4o9obfJM5uhXRfQSr43nkXW with preview, Age 0/no-store, but was built with production Supabase URL. Branch-scoped Preview overrides and isolated-build flag now apply only to codex/release-v1-20261001; new build required. No custom alias changed."
   },
   "supabase": {
     "production": {
@@ -144,20 +150,21 @@
       "stripe_secret_name_present": true,
       "public_test_venue": "404 for solna and pickla-arena-sthlm"
     },
-    "source": "supabase branches list --project-ref ptnvhbniiiapzbyofctg, functions list and secrets list with explicit branch refs, and public-venue HTTP checks on 2026-10-01; status MIGRATIONS_FAILED is branch operation metadata, not proof of current schema defect",
+    "source": "Explicit-ref CLI and isolated-branch read-only SQL plus Supabase dashboard on 2026-10-01. MIGRATIONS_FAILED is workflow metadata; exact failed step cannot be retrieved from disabled workflow detail. Live schema has all 62 repository migration versions and 167 public tables.",
     "isolated_student_test_branch": {
       "ref": "byuwuoivuuklcwmoesrx",
       "ownership": {
         "parent_ref": "ptnvhbniiiapzbyofctg",
         "parent_organization_id": "ynizqjnrxwljfedoyiid",
         "branch_name": "student-pricing-hotfix-test-20260926",
-        "persistent": false
+        "persistent": true,
+        "persistence_repair": "Changed only isolated test branch from ephemeral to persistent on 2026-10-01; no branch recreation"
       },
       "status": "MIGRATIONS_FAILED",
       "preview_project_status": "ACTIVE_HEALTHY",
       "with_data": false,
       "stripe_secret_name_present": false,
-      "public_test_venue": "404 for solna and pickla-arena-sthlm",
+      "public_test_venue": "student-hotfix-5403bc75 returns 200; solna and pickla-arena-sthlm return 404 because those slugs do not exist in this branch",
       "edge_versions": {
         "api-admin": 84,
         "api-bookings": 87,
@@ -165,29 +172,71 @@
         "api-event-public": 74,
         "api-stripe": 24,
         "api-stripe-webhook": 53
-      }
+      },
+      "migration_ledger": {
+        "count": 62,
+        "repo_count": 62,
+        "latest": "20260922120000_cancellation_policy_v1",
+        "missing_repo_versions": 0,
+        "schema_public_tables": 167,
+        "failed_migration": "UNKNOWN: dashboard workflow run is disabled; all repository versions are in ledger",
+        "core_schema_operational": true
+      },
+      "synthetic_data": {
+        "venue_slugs": [
+          "recovery-a-f3567887b6",
+          "recovery-a2-f3567887b6",
+          "recovery-b-f3567887b6",
+          "student-hotfix-5403bc75",
+          "student-hotfix-71e4fa0e",
+          "student-hotfix-db011b93"
+        ],
+        "auth_users": 15,
+        "auth_non_example_test": 0,
+        "commerce_orders": 35,
+        "stripe_test_session_orders": 2,
+        "non_test_session_orders": 0,
+        "certification_venue": "student-hotfix-5403bc75",
+        "certification_occurrence_date": "2026-10-13",
+        "student_session_id": "b4bf1691-8f9c-463b-b7eb-57bb7b1fcae0",
+        "normal_open_play_session_id": "f1a6e8af-473a-4390-ab3d-bc8c848ebf1b"
+      },
+      "auth_config": "15 example.test users; one active venue_admin for certification venue; project Auth settings not fully audited",
+      "secret_names": [
+        "SUPABASE_ANON_KEY",
+        "SUPABASE_DB_URL",
+        "SUPABASE_JWKS",
+        "SUPABASE_PUBLISHABLE_KEYS",
+        "SUPABASE_SECRET_KEYS",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_URL"
+      ]
     }
   },
   "routes": {
     "vercel_git": "ENABLED_PREVIEW",
     "vercel_autoassign": "ENABLED_SHARED_STAGE",
     "vercel_hooks": "NONE_SHARED_STAGE; OTHER_PROJECTS_UNKNOWN",
-    "supabase_github": "UNKNOWN",
+    "supabase_github": "DISCONNECTED_PARENT_DASHBOARD",
     "manual_cli": "PRESENT",
-    "production_exclusive": false
+    "production_exclusive": false,
+    "isolated_vercel_deploy_hooks": "NONE",
+    "isolated_vercel_preview_branch": "codex/release-v1-20261001",
+    "isolated_preview_domains": "VERCEL_APP_ONLY"
   },
   "local_gates": {
     "prod_check": "Vitest plus source assertions plus build/PWA identity artifact checks; no live checkout or Stage behavior",
     "edge_plan": "shared CORS browser consumer source selection only",
-    "migrations": "SQL files and manual apply; ledger unverified",
-    "stripe_test": "mocked tests found; isolated real checkout unverified",
-    "release_identity": "generated build identity plus dynamic /api/release source; served identity unverified",
+    "migrations": "62 repo versions match isolated ledger; historical MIGRATIONS_FAILED workflow step unknown",
+    "stripe_test": "No live checkout in this run: isolated Supabase ref lacks STRIPE_SECRET_KEY and GitHub Actions secret names are empty",
+    "release_identity": "Old PR preview identity PASS but built with production Supabase URL; isolated branch-scoped rebuild pending",
+    "isolated_deployed_studentpris": "At 2026-10-01T16:06Z and repeated after reset: Admin save/reload PASS, Studentpris 59/59/59/59 PASS, explicit Play rule 49 PASS, normal Open Play 165/99/0/0 PASS; observed directly on isolated Edge APIs; no candidate SHA-bound Vercel preview yet",
     "cors": "source contract gate; live gate available but not run",
     "ops": "ops-agent-check source checks"
   },
   "isolated_stage_decision": {
     "status": "BLOCKED",
-    "reason": "Shared Stage serves Storefront and autoassigns main; existing isolated Studentpris branch has MIGRATIONS_FAILED operation status, no Stripe secret and no public synthetic venue. No safe real checkout target is currently verified.",
-    "minimum_action": "Rehabilitate the existing isolated Studentpris branch: resolve/verify migration state, seed synthetic venue plus Studentpris and normal Open Play occurrences, wire a dedicated Stripe TEST key to that branch and a trusted GitHub Stage environment, and bind an immutable Vercel preview deployment to this branch without assigning stage.playpickla.com. Verify project ownership and exact identities before any deploy."
+    "reason": "Isolated branch and deployed synthetic pricing path work. Exact-SHA Vercel preview rebuild is pending. Protected main does not contain the trusted workflow/policy and GitHub certification secrets are absent. Isolated branch has no Stripe secret, so real TEST payment is unverified.",
+    "minimum_action": "Publish this trusted workflow/policy on protected main, provision scoped CI tokens and transfer the existing Stripe TEST credential through approved secret stores into only the isolated branch and certification environment; the PR-branch Vercel overrides are already configured."
   }
 }
