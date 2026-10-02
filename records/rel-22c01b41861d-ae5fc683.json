@@ -27,45 +27,25 @@
   "edge_manifest": {},
   "invariants": {
     "price.server_authoritative": {
-      "status": "blocked",
-      "reason": "certification environment management credentials absent; no target mutation attempted",
-      "evidence_ref": "github-actions:37014924459:110863629595",
-      "at": "2026-10-02T14:02:03.087Z"
+      "status": "required"
     },
     "release.identity_exact": {
-      "status": "passed",
-      "evidence_ref": "github-actions:37014924459:110863408122",
-      "at": "2026-10-02T14:02:03.087Z"
+      "status": "required"
     },
     "release.stage_identity_exact": {
-      "status": "blocked",
-      "reason": "certification environment management credentials absent; no target mutation attempted",
-      "evidence_ref": "github-actions:37014924459:110863629595",
-      "at": "2026-10-02T14:02:03.087Z"
+      "status": "required"
     },
     "studentpris.member_matrix": {
-      "status": "blocked",
-      "reason": "certification environment management credentials absent; no target mutation attempted",
-      "evidence_ref": "github-actions:37014924459:110863629595",
-      "at": "2026-10-02T14:02:03.087Z"
+      "status": "required"
     },
     "open_play.inverse": {
-      "status": "blocked",
-      "reason": "certification environment management credentials absent; no target mutation attempted",
-      "evidence_ref": "github-actions:37014924459:110863629595",
-      "at": "2026-10-02T14:02:03.087Z"
+      "status": "required"
     },
     "studentpris.admin_save_reload": {
-      "status": "blocked",
-      "reason": "certification environment management credentials absent; no target mutation attempted",
-      "evidence_ref": "github-actions:37014924459:110863629595",
-      "at": "2026-10-02T14:02:03.087Z"
+      "status": "required"
     },
     "stripe.test_amount": {
-      "status": "blocked",
-      "reason": "certification environment management credentials absent; no target mutation attempted",
-      "evidence_ref": "github-actions:37014924459:110863629595",
-      "at": "2026-10-02T14:02:03.087Z"
+      "status": "required"
     }
   },
   "bootstrap_trust": {
@@ -80,27 +60,11 @@
     "migrations": "manual-review"
   },
   "recovery_reference": null,
-  "evidence": {
-    "bootstrap_ci": {
-      "run_id": 37014924459,
-      "run_url": "https://github.com/guggeuber/pickla-flow-1b995a61/actions/runs/37014924459",
-      "workflow_sha": "9e81d4ad3cde042ab01798432226fb3c6243bbb7",
-      "inspect_job_id": 110863334613,
-      "local_gate_job_id": 110863408122,
-      "stage_job_id": 110863629595,
-      "inspect": "passed",
-      "local_gates": "passed",
-      "stage": "blocked_before_target_mutation",
-      "candidate_sha": "22c01b41861db8423dee578c048048a660fff50b",
-      "observed_at": "2026-10-02T14:02:03.087Z"
-    }
-  },
-  "status": "BLOCKED",
-  "blockers": [
-    "Vercel or Supabase read credential unavailable in trusted main certification environment"
-  ],
-  "created_at": "2026-10-02T13:43:52.683Z",
-  "updated_at": "2026-10-02T14:02:03.087Z",
+  "evidence": {},
+  "status": "INSPECTED",
+  "blockers": [],
+  "created_at": "2026-10-02T14:52:27.741Z",
+  "updated_at": "2026-10-02T14:52:27.751Z",
   "events": [
     {
       "event": "INSPECTED",
