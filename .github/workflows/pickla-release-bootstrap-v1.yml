@@ -1,0 +1,117 @@
+name: Pickla Release V1 isolated bootstrap
+on:
+  push:
+    tags:
+      - pickla-release-bootstrap-v1
+permissions:
+  contents: read
+concurrency:
+  group: pickla-stage-v1
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.record.outputs.release_id }}
+      candidate_sha: ${{ steps.record.outputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Inspect fixed candidate from reviewed bootstrap tag
+        id: record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PICKLA_BOOTSTRAP_REQUEST: reviewed_tag_v1
+        run: |
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          gh auth setup-git
+          git fetch origin 22c01b41861db8423dee578c048048a660fff50b
+          node scripts/pickla-release.mjs inspect 22c01b41861db8423dee578c048048a660fff50b
+          RELEASE_ID="$(find .pickla-release-v1 -maxdepth 1 -name 'rel-*.json' -print -quit | sed 's|.*/||;s|\.json$||')"
+          [[ "$RELEASE_ID" =~ ^rel-[0-9a-f]{12}-[0-9a-f]{8}$ ]]
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=22c01b41861db8423dee578c048048a660fff50b" >> "$GITHUB_OUTPUT"
+          node scripts/release-registry-sync.mjs
+  local_gates:
+    needs: inspect
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load inspected record and run credential-free candidate gates
+        env:
+          RELEASE_ID: ${{ needs.inspect.outputs.release_id }}
+          CANDIDATE_SHA: ${{ needs.inspect.outputs.candidate_sha }}
+        run: |
+          [[ "$RELEASE_ID" =~ ^rel-[0-9a-f]{12}-[0-9a-f]{8}$ ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch origin refs/heads/pickla-release-registry:refs/remotes/origin/pickla-release-registry
+          git fetch origin "$CANDIDATE_SHA"
+          mkdir -p .pickla-release-v1
+          git show "origin/pickla-release-registry:records/${RELEASE_ID}.json" > ".pickla-release-v1/${RELEASE_ID}.json"
+          npm ci --ignore-scripts
+          node scripts/pickla-release.mjs verify-local "$RELEASE_ID"
+  stage_verify:
+    needs: [inspect, local_gates]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: pickla-release-certification
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Load trusted record and install harness dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.inspect.outputs.release_id }}
+          PICKLA_BOOTSTRAP_SHA: ${{ vars.PICKLA_BOOTSTRAP_SHA }}
+        run: |
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$PICKLA_BOOTSTRAP_SHA" = "$GITHUB_SHA"
+          [[ "$RELEASE_ID" =~ ^rel-[0-9a-f]{12}-[0-9a-f]{8}$ ]]
+          gh auth setup-git
+          git fetch origin refs/heads/pickla-release-registry:refs/remotes/origin/pickla-release-registry
+          mkdir -p .pickla-release-v1
+          git show "origin/pickla-release-registry:records/${RELEASE_ID}.json" > ".pickla-release-v1/${RELEASE_ID}.json"
+          npm ci --ignore-scripts
+          command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
+          npx playwright install --with-deps chromium
+      - name: Stage exact isolated candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.inspect.outputs.release_id }}
+          PICKLA_BOOTSTRAP_SHA: ${{ vars.PICKLA_BOOTSTRAP_SHA }}
+          STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
+          STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+          STRIPE_TEST_WEBHOOK_SECRET: ${{ secrets.STRIPE_TEST_WEBHOOK_SECRET }}
+        run: node scripts/pickla-release.mjs stage "$RELEASE_ID"
+      - name: Verify deployed pricing and Stripe TEST evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.inspect.outputs.release_id }}
+          PICKLA_BOOTSTRAP_SHA: ${{ vars.PICKLA_BOOTSTRAP_SHA }}
+          PICKLA_LOCAL_GATE_SHA: ${{ needs.inspect.outputs.candidate_sha }}
+          STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
+          STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+        run: node scripts/pickla-release.mjs verify-stage "$RELEASE_ID"
+      - name: Persist blocked or passed evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if test -d .pickla-release-v1; then node scripts/release-registry-sync.mjs; fi
