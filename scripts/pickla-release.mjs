@@ -8,7 +8,7 @@ import { digest, edgeGraph, classify, selectInvariants, gitDiffPaths } from "./r
 import { validateTarget, isolatedStagePreflight, withStageLock } from "./release-safety.mjs";
 import { withIsolatedTargetLock } from "./release-isolated-lock.mjs";
 import { createExactPreview, discoverExactPreview } from "./release-isolated-preview.mjs";
-import { configureIsolatedCheckoutOrigin, verifyIsolatedBranch } from "./release-isolated-supabase.mjs";
+import { configureIsolatedCheckoutOrigin, isolatedFunctionVersions, verifyIsolatedBranch } from "./release-isolated-supabase.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const policyBytes = readFileSync(join(root, "release/policy.json"));
@@ -139,6 +139,7 @@ function stageLocked(record, id) {
   let previewMutationAttempted = false;
   try {
     const branch = verifyIsolatedBranch(target);
+    const edgeVersions = isolatedFunctionVersions(target);
     previewMutationAttempted = true;
     const deploymentId = record.stage?.vercel_deployment_id || createExactPreview(target, record.candidate_sha, id);
     const preview = discoverExactPreview(target, record.candidate_sha, process.env.STAGE_VERCEL_TOKEN, deploymentId);
@@ -155,7 +156,7 @@ function stageLocked(record, id) {
     }
     // The URL is an immutable Vercel deployment. Supabase is explicit and must
     // be verified independently before any Edge or fixture mutation.
-    record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, fixture_venue_slug: target.fixture_venue_slug, checkout_origin: checkoutOrigin.checkout_origin, stripe_test_credentials_available: stripeConfigured };
+    record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, edge_versions: edgeVersions, fixture_venue_slug: target.fixture_venue_slug, checkout_origin: checkoutOrigin.checkout_origin, stripe_test_credentials_available: stripeConfigured };
     record.invariants["release.stage_identity_exact"] = { status: "passed", evidence_ref: `vercel:${preview.vercel_deployment_id}`, at: preview.verified_at };
     record.status = "STAGED";
     record.blockers = [];
@@ -214,6 +215,7 @@ function verify(id, mode = "normal") {
         if (current.vercel_deployment_id !== record.stage.vercel_deployment_id) throw new Error("staged Vercel identity changed");
         const branch = verifyIsolatedBranch(target);
         if (branch.ref !== record.stage.supabase_ref || branch.branch_id !== record.stage.supabase_branch_id) throw new Error("staged Supabase identity changed");
+        if (JSON.stringify(isolatedFunctionVersions(target)) !== JSON.stringify(record.stage.edge_versions)) throw new Error("staged Edge function versions changed");
         const evidence = JSON.parse(execFileSync("node", [join(root, "scripts/release-studentpris-harness.mjs"), "run"], { cwd: root, env: withoutStripeEnv(), encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }));
         record.evidence.studentpris = evidence;
         for (const key of ["price.server_authoritative", "studentpris.member_matrix", "open_play.inverse", "studentpris.admin_save_reload"]) if (record.invariants[key]) record.invariants[key] = { status: "passed", evidence_ref: `record:evidence.studentpris#${evidence.sha256}`, at: evidence.observed_at };
@@ -229,6 +231,7 @@ function verify(id, mode = "normal") {
           record.invariants["stripe.test_amount"] = { status: "passed", evidence_ref: `record:evidence.stripe_test#${payment.sha256}`, at: payment.observed_at };
           save(record, "EVIDENCE", { key: payment.sha256, scope: "isolated-stripe-test", digest: payment.sha256 });
         }
+        if (JSON.stringify(isolatedFunctionVersions(target)) !== JSON.stringify(record.stage.edge_versions)) throw new Error("isolated Edge function versions changed during certification");
       }));
     } catch (error) {
       if (gate === "stripe" && record.invariants["stripe.test_amount"]) record.invariants["stripe.test_amount"] = { status: "failed", reason: "trusted Stripe TEST payment or canonical Pickla result did not verify" };

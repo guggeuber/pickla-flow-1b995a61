@@ -25,6 +25,21 @@ export function verifyIsolatedBranch(target, token = process.env.STAGE_SUPABASE_
   return { ref: branch.project_ref, branch_id: branch.id, parent_ref: branch.parent_project_ref, status: branch.status, preview_project_status: branch.preview_project_status, with_data: branch.with_data, persistent: branch.persistent };
 }
 
+export function isolatedFunctionVersions(target, token = process.env.STAGE_SUPABASE_ACCESS_TOKEN) {
+  if (target.supabase_ref !== "byuwuoivuuklcwmoesrx") throw new Error("unapproved Edge version target");
+  const raw = execFileSync("npx", ["--yes", "supabase@2.113.0", "functions", "list", "--project-ref", target.supabase_ref, "--output", "json"], {
+    encoding: "utf8", timeout: 90000, maxBuffer: 4 * 1024 * 1024,
+    env: managementEnv(token), stdio: ["ignore", "pipe", "pipe"],
+  });
+  const functions = JSON.parse(raw);
+  const required = ["api-admin", "api-bookings", "api-event-public", "api-memberships", "api-stripe-webhook"];
+  return Object.fromEntries(required.map((name) => {
+    const matches = functions.filter((value) => value.slug === name && value.status === "ACTIVE" && Number.isInteger(value.version));
+    if (matches.length !== 1) throw new Error(`isolated Edge identity unavailable: ${name}`);
+    return [name, matches[0].version];
+  }));
+}
+
 export function configureIsolatedCheckoutOrigin(target, deploymentUrl, token = process.env.STAGE_SUPABASE_ACCESS_TOKEN) {
   if (target.supabase_ref !== "byuwuoivuuklcwmoesrx" || !deploymentUrl?.endsWith(".vercel.app") || target.forbidden_domains.some((domain) => deploymentUrl === domain || deploymentUrl.endsWith(`.${domain}`))) throw new Error("checkout origin is not an allowlisted isolated Preview");
   const origin = `https://${deploymentUrl}`;
