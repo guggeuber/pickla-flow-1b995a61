@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createHmac, createHash } from "node:crypto";
 import { isolatedConnection, isolatedQuery } from "./release-isolated-db.mjs";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const sha256 = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-function jwt(secret, userId) {
+export function jwt(secret, userId) {
   const now = Math.floor(Date.now() / 1000);
   const parts = [{ alg: "HS256", typ: "JWT" }, { aud: "authenticated", role: "authenticated", sub: userId, iat: now, exp: now + 600 }].map((value) => Buffer.from(JSON.stringify(value)).toString("base64url"));
   return `${parts.join(".")}.${createHmac("sha256", secret).update(parts.join(".")).digest("base64url")}`;
@@ -86,7 +87,7 @@ export async function certifyStudentpris(target, fixture) {
   return { ...evidence, sha256: sha256(evidence) };
 }
 
-if (process.argv[2] === "run") {
+if (process.argv[2] === "run" && process.argv[1] === fileURLToPath(import.meta.url)) {
   const target = JSON.parse(readFileSync(new URL("../release/stage-targets.json", import.meta.url))).targets[0];
   const fixture = { date: "2026-10-13", student_session_id: "b4bf1691-8f9c-463b-b7eb-57bb7b1fcae0", normal_session_id: "f1a6e8af-473a-4390-ab3d-bc8c848ebf1b" };
   try { console.log(JSON.stringify(await certifyStudentpris(target, fixture))); }

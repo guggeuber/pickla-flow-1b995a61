@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import { digest, edgeGraph, classify, selectInvariants, gitDiffPaths } from "./release-policy.mjs";
 import { validateTarget, isolatedStagePreflight, withStageLock } from "./release-safety.mjs";
 import { withIsolatedTargetLock } from "./release-isolated-lock.mjs";
-import { discoverExactPreview } from "./release-isolated-preview.mjs";
-import { verifyIsolatedBranch } from "./release-isolated-supabase.mjs";
+import { createExactPreview, discoverExactPreview } from "./release-isolated-preview.mjs";
+import { configureIsolatedCheckoutOrigin, verifyIsolatedBranch } from "./release-isolated-supabase.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const policyBytes = readFileSync(join(root, "release/policy.json"));
@@ -21,6 +21,12 @@ const command = process.argv[2 + offset], arg = process.argv[3 + offset];
 const shaPattern = /^[0-9a-f]{40}$/;
 const releasePattern = /^rel-[0-9a-f]{12}-[0-9a-f]{8}$/;
 function git(args, cwd = root) { return execFileSync("git", args, { cwd, encoding: "utf8" }).trim(); }
+function withoutStripeEnv() {
+  const safeEnv = { ...process.env };
+  delete safeEnv.STRIPE_TEST_SECRET_KEY;
+  delete safeEnv.STRIPE_TEST_WEBHOOK_SECRET;
+  return safeEnv;
+}
 function fail(reason) { console.error(JSON.stringify({ status: "BLOCKED", reason })); process.exit(1); }
 function currentMain() {
   const remote = git(["ls-remote", "origin", "refs/heads/main"]).split("\t")[0];
@@ -104,9 +110,10 @@ function stage(id) {
     return withStageLock(stageLock, () => withIsolatedTargetLock(root, id, () => stageLocked(record, id)));
   } catch (error) {
     record.status = "BLOCKED";
-    record.blockers = [`isolated target lock unavailable: ${error.message}`];
-    save(record, "BLOCKED", { key: "stage-lock", reason: record.blockers[0] });
+    record.blockers = [`isolated target requires reconciliation: ${error.message}`];
+    save(record, "BLOCKED", { key: "stage-reconcile", reason: record.blockers[0] });
     console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers }));
+    process.exitCode = 1;
   }
 }
 function stageLocked(record, id) {
@@ -116,6 +123,7 @@ function stageLocked(record, id) {
     record.blockers = [reason];
     save(record, "BLOCKED", { key, reason });
     console.log(JSON.stringify({ release_id: id, status: record.status, blockers: record.blockers }));
+    process.exitCode = 1;
   };
   if (!target) {
     const decision = inventory.isolated_stage_decision;
@@ -128,20 +136,36 @@ function stageLocked(record, id) {
   }
   if (record.affected_edge_functions.length) return blocked("edge-deploy", "candidate changes Edge functions; isolated Edge deployment/version adapter is not approved for this target");
   if (!process.env.STAGE_VERCEL_TOKEN || !process.env.STAGE_SUPABASE_ACCESS_TOKEN) return blocked("stage-credentials", "Vercel or Supabase read credential unavailable in trusted main certification environment");
+  let previewMutationAttempted = false;
   try {
     const branch = verifyIsolatedBranch(target);
-    const preview = discoverExactPreview(target, record.candidate_sha);
+    previewMutationAttempted = true;
+    const deploymentId = record.stage?.vercel_deployment_id || createExactPreview(target, record.candidate_sha, id);
+    const preview = discoverExactPreview(target, record.candidate_sha, process.env.STAGE_VERCEL_TOKEN, deploymentId);
     const targetError = validateTarget(target, { ...preview, supabase_ref: branch.ref });
     if (targetError) return blocked("stage-identity", targetError);
+    const checkoutOrigin = configureIsolatedCheckoutOrigin(target, preview.deployment_url);
+    let stripeConfigured = false;
+    if (process.env.STRIPE_TEST_SECRET_KEY && process.env.STRIPE_TEST_WEBHOOK_SECRET) {
+      execFileSync("node", [join(root, "scripts/release-stripe-test-config.mjs")], {
+        cwd: root, env: process.env, encoding: "utf8", timeout: 120000,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      stripeConfigured = true;
+    }
     // The URL is an immutable Vercel deployment. Supabase is explicit and must
     // be verified independently before any Edge or fixture mutation.
-    record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, fixture_venue_slug: target.fixture_venue_slug };
+    record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, fixture_venue_slug: target.fixture_venue_slug, checkout_origin: checkoutOrigin.checkout_origin, stripe_test_credentials_available: stripeConfigured };
     record.invariants["release.stage_identity_exact"] = { status: "passed", evidence_ref: `vercel:${preview.vercel_deployment_id}`, at: preview.verified_at };
     record.status = "STAGED";
     record.blockers = [];
     save(record, "STAGED", { key: preview.vercel_deployment_id, deployment_id: preview.vercel_deployment_id, supabase_ref: target.supabase_ref });
     console.log(JSON.stringify({ release_id: id, status: "STAGED", stage: record.stage }));
   } catch (error) {
+    if (previewMutationAttempted) {
+      blocked("stage-adapter", `exact-SHA preview state uncertain: ${error.message}`);
+      throw error;
+    }
     return blocked("stage-adapter", `exact-SHA preview unavailable: ${error.message}`);
   }
 }
@@ -183,19 +207,32 @@ function verify(id, mode = "normal") {
   if (mode === "local") { console.log(JSON.stringify({ release_id: id, candidate_sha: record.candidate_sha, status: "LOCAL_GATES_PASS" })); return; }
   const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage");
   if (record.stage && target && trustedMain(record) && process.env.STAGE_VERCEL_TOKEN && process.env.STAGE_SUPABASE_ACCESS_TOKEN) {
+    let gate = "studentpris";
     try {
       withStageLock(join(registryDir, "isolated-stage.lock"), () => withIsolatedTargetLock(root, id, () => {
-        const current = discoverExactPreview(target, record.candidate_sha);
+        const current = discoverExactPreview(target, record.candidate_sha, process.env.STAGE_VERCEL_TOKEN, record.stage.vercel_deployment_id);
         if (current.vercel_deployment_id !== record.stage.vercel_deployment_id) throw new Error("staged Vercel identity changed");
         const branch = verifyIsolatedBranch(target);
         if (branch.ref !== record.stage.supabase_ref || branch.branch_id !== record.stage.supabase_branch_id) throw new Error("staged Supabase identity changed");
-        const evidence = JSON.parse(execFileSync("node", [join(root, "scripts/release-studentpris-harness.mjs"), "run"], { cwd: root, env: process.env, encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024 }));
+        const evidence = JSON.parse(execFileSync("node", [join(root, "scripts/release-studentpris-harness.mjs"), "run"], { cwd: root, env: withoutStripeEnv(), encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }));
         record.evidence.studentpris = evidence;
         for (const key of ["price.server_authoritative", "studentpris.member_matrix", "open_play.inverse", "studentpris.admin_save_reload"]) if (record.invariants[key]) record.invariants[key] = { status: "passed", evidence_ref: `record:evidence.studentpris#${evidence.sha256}`, at: evidence.observed_at };
         save(record, "EVIDENCE", { key: evidence.sha256, scope: "isolated-studentpris", digest: evidence.sha256 });
+        if (process.env.STRIPE_TEST_SECRET_KEY && record.stage.stripe_test_credentials_available && record.invariants["stripe.test_amount"]?.status !== "passed") {
+          gate = "stripe";
+          const payment = JSON.parse(execFileSync("node", [join(root, "scripts/release-stripe-test-harness.mjs"), "run", current.deployment_url, id], {
+            cwd: root, env: process.env, encoding: "utf8", timeout: 240000, maxBuffer: 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          }));
+          if (payment.target_ref !== target.supabase_ref || payment.preview_deployment_url !== current.deployment_url || payment.amount_minor !== 5900 || payment.livemode !== false || payment.provider_payment !== "paid" || payment.successful_charge_count !== 1 || payment.registration_count !== 1 || payment.paid_receipt_count !== 1 || payment.paid_ledger_count !== 1 || payment.processed_checkout_webhook_count !== 1) throw new Error("Stripe TEST evidence contract mismatch");
+          record.evidence.stripe_test = payment;
+          record.invariants["stripe.test_amount"] = { status: "passed", evidence_ref: `record:evidence.stripe_test#${payment.sha256}`, at: payment.observed_at };
+          save(record, "EVIDENCE", { key: payment.sha256, scope: "isolated-stripe-test", digest: payment.sha256 });
+        }
       }));
     } catch (error) {
-      record.blockers = [`isolated deployed-behavior gate failed: ${error.message}`];
+      if (gate === "stripe" && record.invariants["stripe.test_amount"]) record.invariants["stripe.test_amount"] = { status: "failed", reason: "trusted Stripe TEST payment or canonical Pickla result did not verify" };
+      record.blockers = [gate === "stripe" ? "trusted Stripe TEST payment or canonical Pickla result did not verify; isolated target lock held for reconciliation" : `isolated deployed-behavior gate failed: ${error.message}`];
       save(record, "BLOCKED", { key: "isolated-behavior", reason: record.blockers[0] });
     }
   }
@@ -205,10 +242,11 @@ function verify(id, mode = "normal") {
       : record.stage ? "trusted deployed-behavior evidence unavailable" : "exact-SHA isolated preview not staged";
     record.invariants[item.id] = { status: "blocked", reason };
   }
-  record.blockers = [...record.blockers.filter((value) => value.startsWith("isolated deployed-behavior gate failed:") || value.startsWith("trusted-main Stage runner unavailable:") || value.startsWith("isolated target lock unavailable:")), ...Object.entries(record.invariants).filter(([, value]) => value.status !== "passed").map(([key, value]) => `${key}: ${value.status}${value.reason ? ` (${value.reason})` : ""}`)];
+  record.blockers = [...record.blockers.filter((value) => value.startsWith("isolated deployed-behavior gate failed:") || value.startsWith("trusted Stripe TEST payment") || value.startsWith("trusted-main Stage runner unavailable:") || value.startsWith("isolated target lock unavailable:")), ...Object.entries(record.invariants).filter(([, value]) => value.status !== "passed").map(([key, value]) => `${key}: ${value.status}${value.reason ? ` (${value.reason})` : ""}`)];
   record.status = record.blockers.length ? "BLOCKED" : "READY_FOR_APPROVAL";
   save(record, "VERIFIED", { key: digest(JSON.stringify(record.invariants)), status: record.status });
   console.log(JSON.stringify({ release_id: id, status: record.status, invariants: record.invariants, blockers: record.blockers }, null, 2));
+  if (record.status !== "READY_FOR_APPROVAL") process.exitCode = 1;
 }
 function status(id) { const record = load(id); console.log(JSON.stringify(record, null, 2)); }
 if (command === "inspect") inspect(arg);

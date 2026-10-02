@@ -231,6 +231,8 @@
       },
       "auth_config": "15 example.test users; one active venue_admin for certification venue; project Auth settings not fully audited",
       "secret_names": [
+        "PICKLA_ENVIRONMENT",
+        "PUBLIC_SITE_URL",
         "SUPABASE_ANON_KEY",
         "SUPABASE_DB_URL",
         "SUPABASE_JWKS",
@@ -240,7 +242,9 @@
         "SUPABASE_URL"
       ],
       "migration_ledger_count": 62,
-      "public_table_count": 169
+      "public_table_count": 169,
+      "checkout_origin": "https://pickla-flow-1b995a61-6z2duaze3-gunnar-picklaats-projects.vercel.app",
+      "checkout_origin_verified": "2026-10-02"
     }
   },
   "routes": {
@@ -266,11 +270,11 @@
   },
   "isolated_stage_decision": {
     "status": "BLOCKED",
-    "reason": "Isolated branch and deployed synthetic pricing path work. Exact-SHA Vercel preview rebuild is pending. Protected main does not contain the trusted workflow/policy and GitHub certification secrets are absent. Isolated branch has no Stripe secret, so real TEST payment is unverified.",
-    "minimum_action": "Publish this trusted workflow/policy on protected main, provision scoped CI tokens and transfer the existing Stripe TEST credential through approved secret stores into only the isolated branch and certification environment; the PR-branch Vercel overrides are already configured."
+    "reason": "Isolated branch and deployed synthetic pricing path work. A manual exact-SHA Preview API probe passed at PR head 0a52c087; the workflow is not yet on protected main. GitHub certification secrets and the isolated branch Stripe TEST secrets are absent, so real TEST payment is unverified.",
+    "minimum_action": "After separate routing cutover approval, merge the reviewed bootstrap PR to protected main. Provision the four permanent certification environment secret names and isolated Stripe TEST webhook through an approved secret channel; do not copy secret values into a chat or worktree."
   },
   "bootstrap_2026_10_02": {
-    "pr_head": "e9bc19061d2535ba0b59c9df0efc8943755792e8",
+    "pr_head_at_control_plane_read": "0a52c087126a920dd6ca3eb0f6dc1530f5fe5a7c",
     "origin_main": "39373c657589f46673c2563c03879b7201e8bd30",
     "merge_effect": "main push triggers production deployments in all three Vercel projects; production and shared Stage custom domains autoassign if build succeeds",
     "isolated_secret_names": [
@@ -285,7 +289,14 @@
     "stripe_test_credentials_available": false,
     "github_certification_secret_names": [],
     "credential_rotation": "BLOCKED: independent legacy JWT/service/anon rotation and authorized opaque credential transfer not verified",
-    "routing_cutover": "REQUIRES_SEPARATE_APPROVAL: disable gitProviderOptions.createDeployments on all three Vercel projects before bootstrap merge; preserve current aliases; manual isolated preview deployment adapter required before this change",
-    "supabase_warning": "MIGRATIONS_FAILED workflow detail unknown; DB select succeeds, 62 migration ledger rows, 169 public tables, 15 synthetic Auth users, and required Edge functions active"
+    "routing_cutover": "REQUIRES_SEPARATE_APPROVAL: disable gitProviderOptions.createDeployments on all three Vercel projects before bootstrap merge; preserve current aliases; exact-SHA Preview API adapter is in PR and must be verified after cutover",
+    "supabase_warning": "MIGRATIONS_FAILED workflow detail unknown; DB select succeeds, 62 migration ledger rows, 169 public tables, 15 synthetic Auth users, and required Edge functions active",
+    "explicit_preview_api_probe": {
+      "deployment_id": "dpl_9jkyxQdqnk8xBsqMpo7MNRyn4s3Q",
+      "served_sha": "0a52c087126a920dd6ca3eb0f6dc1530f5fe5a7c",
+      "environment": "preview",
+      "isolated_supabase_bundle": true,
+      "production_alias_assigned": false
+    }
   }
 }

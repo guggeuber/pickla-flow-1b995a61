@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { routingPreflight, isolatedStagePreflight, validateTarget, validateReady, validateStripeTest, missingStageCredentials, withStageLock } from "./release-safety.mjs";
@@ -79,4 +79,13 @@ test("missing Stage credential reports names only", () => {
   const missing = missingStageCredentials({ STRIPE_TEST_SECRET_KEY: value });
   assert.deepEqual(missing, ["STAGE_VERCEL_TOKEN", "STAGE_SUPABASE_ACCESS_TOKEN"]);
   assert.ok(!JSON.stringify(missing).includes(value));
+});
+test("trusted Stripe TEST wiring fails without credentials and never echoes supplied material", () => {
+  const marker = "fixture-secret-that-must-not-appear";
+  const result = spawnSync("node", [new URL("./release-stripe-test-config.mjs", import.meta.url).pathname], {
+    encoding: "utf8", env: { PATH: process.env.PATH, STRIPE_TEST_SECRET_KEY: marker },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /one-time Stripe TEST setup missing/);
+  assert.ok(!`${result.stdout}${result.stderr}`.includes(marker));
 });
