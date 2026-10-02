@@ -61,10 +61,12 @@
   },
   "recovery_reference": null,
   "evidence": {},
-  "status": "INSPECTED",
-  "blockers": [],
+  "status": "BLOCKED",
+  "blockers": [
+    "exact-SHA preview unavailable: Command failed: npx --yes supabase@2.113.0 branches list --project-ref ptnvhbniiiapzbyofctg --output json\n\u001b[31munexpected list branch status 403: {\"message\":\"Your account does not have the necessary privileges to access this endpoint. For more details, refer to our documentation https://supabase.com/docs/guides/platform/access-control\"}\u001b[39m\nTry rerunning the command with --debug to troubleshoot the error.\n"
+  ],
   "created_at": "2026-10-02T14:52:27.741Z",
-  "updated_at": "2026-10-02T14:52:27.751Z",
+  "updated_at": "2026-10-02T14:54:00.928Z",
   "events": [
     {
       "event": "INSPECTED",
@@ -82,6 +84,12 @@
       "key": "bootstrap-ci:37014924459",
       "at": "2026-10-02T14:02:03.087Z",
       "scope": "reviewed-bootstrap-ci"
+    },
+    {
+      "event": "BLOCKED",
+      "key": "stage-adapter",
+      "at": "2026-10-02T14:54:00.928Z",
+      "reason": "exact-SHA preview unavailable: Command failed: npx --yes supabase@2.113.0 branches list --project-ref ptnvhbniiiapzbyofctg --output json\n\u001b[31munexpected list branch status 403: {\"message\":\"Your account does not have the necessary privileges to access this endpoint. For more details, refer to our documentation https://supabase.com/docs/guides/platform/access-control\"}\u001b[39m\nTry rerunning the command with --debug to troubleshoot the error.\n"
     }
   ]
 }
