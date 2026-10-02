@@ -137,7 +137,7 @@ function stageLocked(record, id) {
     // be verified independently before any Edge or fixture mutation.
     record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, fixture_venue_slug: target.fixture_venue_slug };
     record.invariants["release.stage_identity_exact"] = { status: "passed", evidence_ref: `vercel:${preview.vercel_deployment_id}`, at: preview.verified_at };
-    record.status = "INSPECTED";
+    record.status = "STAGED";
     record.blockers = [];
     save(record, "STAGED", { key: preview.vercel_deployment_id, deployment_id: preview.vercel_deployment_id, supabase_ref: target.supabase_ref });
     console.log(JSON.stringify({ release_id: id, status: "STAGED", stage: record.stage }));
@@ -145,26 +145,42 @@ function stageLocked(record, id) {
     return blocked("stage-adapter", `exact-SHA preview unavailable: ${error.message}`);
   }
 }
-function verify(id) {
+function verify(id, mode = "normal") {
   const record = load(id); mainGuard(record);
   if (dirty()) fail("dirty runner checkout");
-  const local = policy.invariants.filter((item) => record.invariants[item.id]?.status === "required" && item.environment === "local");
-  const temp = execFileSync("mktemp", ["-d", join(tmpdir(), "pickla-verify-XXXXXX")], { encoding: "utf8" }).trim();
-  try {
-    cloneCandidate(temp, record.candidate_sha);
-    const dependencyRoot = process.env.PICKLA_RELEASE_DEPENDENCIES || join(root, "node_modules");
-    if (!existsSync(dependencyRoot)) fail("local dependencies unavailable; run npm ci in trusted runner");
-    if (git(["show", `${record.candidate_sha}:package-lock.json`]) !== readFileSync(join(root, "package-lock.json"), "utf8").trim()) fail("candidate dependency lock differs from runner; install isolated dependencies first");
-    symlinkSync(dependencyRoot, join(temp, "node_modules"), "dir");
-    for (const item of local) {
-      if (record.invariants[item.id].status === "passed") continue;
-      const safeEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR || tmpdir(), CI: "true", COMMIT_SHA: record.candidate_sha };
-      const result = spawnSync("sh", ["-c", item.command], { cwd: temp, env: safeEnv, encoding: "utf8", timeout: item.timeout_seconds * 1000, maxBuffer: 4 * 1024 * 1024 });
-      const log = `${result.stdout || ""}\n${result.stderr || ""}`;
-      record.invariants[item.id] = { status: result.status === 0 ? "passed" : "failed", exit_code: result.status, log_sha256: digest(log), at: new Date().toISOString() };
-      save(record, "EVIDENCE", { key: item.id, invariant: item.id, status: record.invariants[item.id].status, digest: digest(log) });
-    }
-  } finally { rmSync(temp, { recursive: true, force: true }); }
+  const local = policy.invariants.filter((item) => record.invariants[item.id] && item.environment === "local");
+  if (mode === "stage") {
+    if (process.env.GITHUB_ACTIONS !== "true" || process.env.PICKLA_LOCAL_GATE_SHA !== record.candidate_sha || !/^\d+$/.test(process.env.GITHUB_RUN_ID || "")) fail("trusted local-gate job attestation missing");
+    for (const item of local) record.invariants[item.id] = { status: "passed", evidence_ref: `github-actions:${process.env.GITHUB_RUN_ID}:local-gates:${record.candidate_sha}`, at: new Date().toISOString() };
+    save(record, "EVIDENCE", { key: `local-gates:${process.env.GITHUB_RUN_ID}`, scope: "isolated-local-job", candidate_sha: record.candidate_sha });
+  } else if (local.some((item) => record.invariants[item.id]?.status !== "passed")) {
+    if (process.env.STAGE_VERCEL_TOKEN || process.env.STAGE_SUPABASE_ACCESS_TOKEN || process.env.STRIPE_TEST_SECRET_KEY) fail("candidate local gates require a credential-free process");
+    const temp = execFileSync("mktemp", ["-d", join(tmpdir(), "pickla-verify-XXXXXX")], { encoding: "utf8" }).trim();
+    try {
+      cloneCandidate(temp, record.candidate_sha);
+      const dependencyRoot = process.env.PICKLA_RELEASE_DEPENDENCIES || join(root, "node_modules");
+      if (!existsSync(dependencyRoot)) fail("local dependencies unavailable; run npm ci in trusted runner");
+      if (git(["show", `${record.candidate_sha}:package-lock.json`]) !== readFileSync(join(root, "package-lock.json"), "utf8").trim()) fail("candidate dependency lock differs from runner; install isolated dependencies first");
+      symlinkSync(dependencyRoot, join(temp, "node_modules"), "dir");
+      for (const item of local) {
+        if (record.invariants[item.id].status === "passed") continue;
+        const safeEnv = {
+          PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR || tmpdir(),
+          CI: "true", COMMIT_SHA: record.candidate_sha, VERCEL_ENV: "preview",
+          PICKLA_ISOLATED_CERTIFICATION: "byuwuoivuuklcwmoesrx",
+          VITE_SUPABASE_PROJECT_ID: "byuwuoivuuklcwmoesrx",
+          VITE_SUPABASE_URL: "https://byuwuoivuuklcwmoesrx.supabase.co",
+          VITE_SUPABASE_PUBLISHABLE_KEY: "local-synthetic-placeholder",
+        };
+        const result = spawnSync("sh", ["-c", item.command], { cwd: temp, env: safeEnv, encoding: "utf8", timeout: item.timeout_seconds * 1000, maxBuffer: 4 * 1024 * 1024 });
+        const log = `${result.stdout || ""}\n${result.stderr || ""}`;
+        record.invariants[item.id] = { status: result.status === 0 ? "passed" : "failed", exit_code: result.status, log_sha256: digest(log), at: new Date().toISOString() };
+        save(record, "EVIDENCE", { key: item.id, invariant: item.id, status: record.invariants[item.id].status, digest: digest(log) });
+      }
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  }
+  if (local.some((item) => record.invariants[item.id]?.status !== "passed")) fail("required local candidate gate failed");
+  if (mode === "local") { console.log(JSON.stringify({ release_id: id, candidate_sha: record.candidate_sha, status: "LOCAL_GATES_PASS" })); return; }
   const target = targets.targets.find((value) => value.purpose === "isolated_candidate_stage");
   if (record.stage && target && trustedMain(record) && process.env.STAGE_VERCEL_TOKEN && process.env.STAGE_SUPABASE_ACCESS_TOKEN) {
     try {
@@ -198,6 +214,8 @@ function status(id) { const record = load(id); console.log(JSON.stringify(record
 if (command === "inspect") inspect(arg);
 else if (command === "stage") stage(arg);
 else if (command === "verify") verify(arg);
+else if (command === "verify-local") verify(arg, "local");
+else if (command === "verify-stage") verify(arg, "stage");
 else if (command === "status") status(arg);
 else if (command === "promote") fail("promotion disabled in V1: production routing and approval boundary unverified");
 else fail("usage: pickla release inspect <full-sha> | stage <release-id> | verify <release-id> | status <release-id> | promote <release-id> (disabled)");

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "observed_at": "2026-10-01T16:15:00Z",
+  "observed_at": "2026-10-02T12:10:50Z",
   "canonical_main": {
     "sha": "39373c657589f46673c2563c03879b7201e8bd30",
     "source": "git fetch origin main; git ls-remote origin refs/heads/main"
@@ -11,7 +11,16 @@
     "plan": "UNKNOWN",
     "rulesets": [],
     "branch_protection": {
-      "main": false
+      "main": true,
+      "main_details": {
+        "pr_required": true,
+        "required_approvals": 0,
+        "linear_history": true,
+        "enforce_admins": true,
+        "force_push": false,
+        "deletion": false,
+        "reason_zero_approvals": "sole collaborator cannot self-approve"
+      }
     },
     "actions_permissions": {
       "enabled": true,
@@ -56,64 +65,83 @@
     ],
     "secret_names": [],
     "workflows": [],
-    "source": "gh api repo, branches/main, rulesets, actions/permissions, actions/secrets, environments, workflows at 2026-10-01T13:47Z; certification environment created with main-only branch policy at 2026-10-01T16:20Z; account plan query unavailable"
+    "source": "gh api on 2026-10-02: public repo, sole collaborator guggeuber, no rulesets, Actions allowed all/read default, main PR protection enabled and verified, registry/lock enforce_admins enabled, certification environment main branch only and zero secrets",
+    "registry_ref_protection": {
+      "refs": [
+        "pickla-release-registry",
+        "pickla-release-isolated-lock"
+      ],
+      "linear_history": true,
+      "enforce_admins": true,
+      "force_push": false,
+      "deletion": false,
+      "bypass_warning": "repository admin and contents:write token can still make normal fast-forward commits"
+    }
   },
   "vercel": {
     "projects": [
       {
         "role": "production",
         "id": "prj_ZXHb62NWhYVlIrj2yaEZekIxgJVV",
-        "git_connection": "VERIFIED: GitHub PR #4 produces Vercel preview status for this project",
-        "production_branch": "UNKNOWN",
-        "create_deployments": "VERIFIED: PR preview deployment triggered automatically",
-        "autoassign": "UNKNOWN",
-        "aliases": "UNKNOWN",
+        "git_connection": "guggeuber/pickla-flow-1b995a61",
+        "production_branch": "main",
+        "create_deployments": "enabled",
+        "autoassign": true,
+        "aliases": [
+          "playpickla.com",
+          "www.playpickla.com"
+        ],
         "deploy_hooks": [],
         "served_release": {
           "sha": "39373c657589f46673c2563c03879b7201e8bd30",
-          "deployment_id": "dpl_Epaqm5bfxK9ebKyP3h1fYxEBHUWj",
-          "built_at": "2026-09-26T13:01:58.769Z"
+          "deployment_id": "dpl_Epaqm5bfxK9ebKyP3h1fYxEBHUWj"
         },
         "alias": "playpickla.com"
       },
       {
         "role": "shared_stage",
         "id": "prj_UpeWrQfUsTKcYETcIy08PmzeCP1s",
-        "git_connection": "VERIFIED: guggeuber/pickla-flow-1b995a61",
+        "git_connection": "guggeuber/pickla-flow-1b995a61",
         "production_branch": "main",
-        "create_deployments": "VERIFIED: PR preview deployment triggered automatically",
+        "create_deployments": "enabled",
         "autoassign": true,
-        "aliases": "UNKNOWN",
+        "aliases": [
+          "stage.playpickla.com"
+        ],
         "deploy_hooks": [],
         "served_release": {
           "sha": "200b5fe15cbb4174c6a44ef0250e1d55b12e745f",
-          "deployment_id": "dpl_BBjGz3Ht4D1PS2bA9ZhMLCu3c41D",
-          "built_at": "2026-09-23T03:26:32.873Z"
+          "deployment_id": "dpl_BBjGz3Ht4D1PS2bA9ZhMLCu3c41D"
         },
         "alias": "stage.playpickla.com",
         "owner": "gunnar-picklaat's projects (Hobby)"
       },
       {
         "role": "mail",
-        "id": "UNKNOWN",
-        "git_connection": "VERIFIED: GitHub PR #4 produces Vercel preview status for this project",
-        "production_branch": "UNKNOWN",
-        "create_deployments": "VERIFIED: PR preview deployment triggered automatically",
-        "autoassign": "UNKNOWN",
-        "aliases": "UNKNOWN",
-        "deploy_hooks": "UNKNOWN",
-        "served_release": "UNKNOWN",
+        "id": "prj_c9wdkbsstp9Qgx9C8Xf4JIySVrJ6",
+        "git_connection": "guggeuber/pickla-flow-1b995a61",
+        "production_branch": "main",
+        "create_deployments": "enabled",
+        "autoassign": true,
+        "aliases": [
+          "pickla-mail-v1-edde736.vercel.app"
+        ],
+        "deploy_hooks": [],
+        "served_release": {
+          "sha": "567581097d97a8631fc95c2770bffdcbba6effd9",
+          "deployment_id": "dpl_BMWV4ihZ3CWfAVqBjgosPVU3wuY8"
+        },
         "alias": "UNKNOWN"
       }
     ],
-    "source": "Read-only authenticated Vercel settings and CLI 62.1.0, GitHub PR #4 checks, served /api/release on 2026-10-01. Existing PR preview SHA dbc1b60 has deployment dpl_FXWmm4o9obfJM5uhXRfQSr43nkXW with preview, Age 0/no-store, but was built with production Supabase URL. Branch-scoped Preview overrides and isolated-build flag now apply only to codex/release-v1-20261001; new build required. No custom alias changed."
+    "source": "Vercel authenticated GET /v9/projects/{id}, /domains, /v6/deployments and alias inspect on 2026-10-02; all three link main as production branch with gitProviderOptions.createDeployments=enabled and autoAssignCustomDomains=true; all deployHooks=[]"
   },
   "supabase": {
     "production": {
       "ref": "ptnvhbniiiapzbyofctg",
       "status": "ACTIVE_HEALTHY",
-      "git_integration": "UNKNOWN",
-      "deploy_to_production": "UNKNOWN",
+      "git_integration": "DISCONNECTED_PARENT_DASHBOARD",
+      "deploy_to_production": "NO_GITHUB_REPOSITORY_CONNECTED",
       "migration_ledger": "UNKNOWN",
       "edge_versions": {
         "api-admin": 83,
@@ -210,13 +238,15 @@
         "SUPABASE_SECRET_KEYS",
         "SUPABASE_SERVICE_ROLE_KEY",
         "SUPABASE_URL"
-      ]
+      ],
+      "migration_ledger_count": 62,
+      "public_table_count": 169
     }
   },
   "routes": {
-    "vercel_git": "ENABLED_PREVIEW",
-    "vercel_autoassign": "ENABLED_SHARED_STAGE",
-    "vercel_hooks": "NONE_SHARED_STAGE; OTHER_PROJECTS_UNKNOWN",
+    "vercel_git": "ENABLED_ALL_THREE_MAIN_PRODUCTION",
+    "vercel_autoassign": "ENABLED_ALL_THREE",
+    "vercel_hooks": "NONE_ALL_THREE",
     "supabase_github": "DISCONNECTED_PARENT_DASHBOARD",
     "manual_cli": "PRESENT",
     "production_exclusive": false,
@@ -238,5 +268,24 @@
     "status": "BLOCKED",
     "reason": "Isolated branch and deployed synthetic pricing path work. Exact-SHA Vercel preview rebuild is pending. Protected main does not contain the trusted workflow/policy and GitHub certification secrets are absent. Isolated branch has no Stripe secret, so real TEST payment is unverified.",
     "minimum_action": "Publish this trusted workflow/policy on protected main, provision scoped CI tokens and transfer the existing Stripe TEST credential through approved secret stores into only the isolated branch and certification environment; the PR-branch Vercel overrides are already configured."
+  },
+  "bootstrap_2026_10_02": {
+    "pr_head": "e9bc19061d2535ba0b59c9df0efc8943755792e8",
+    "origin_main": "39373c657589f46673c2563c03879b7201e8bd30",
+    "merge_effect": "main push triggers production deployments in all three Vercel projects; production and shared Stage custom domains autoassign if build succeeds",
+    "isolated_secret_names": [
+      "SUPABASE_ANON_KEY",
+      "SUPABASE_DB_URL",
+      "SUPABASE_JWKS",
+      "SUPABASE_PUBLISHABLE_KEYS",
+      "SUPABASE_SECRET_KEYS",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "SUPABASE_URL"
+    ],
+    "stripe_test_credentials_available": false,
+    "github_certification_secret_names": [],
+    "credential_rotation": "BLOCKED: independent legacy JWT/service/anon rotation and authorized opaque credential transfer not verified",
+    "routing_cutover": "REQUIRES_SEPARATE_APPROVAL: disable gitProviderOptions.createDeployments on all three Vercel projects before bootstrap merge; preserve current aliases; manual isolated preview deployment adapter required before this change",
+    "supabase_warning": "MIGRATIONS_FAILED workflow detail unknown; DB select succeeds, 62 migration ledger rows, 169 public tables, 15 synthetic Auth users, and required Edge functions active"
   }
 }

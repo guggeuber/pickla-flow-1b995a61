@@ -57,6 +57,23 @@ test("two Stage runs cannot own durable git target lock", () => {
     assert.doesNotThrow(() => withIsolatedTargetLock(runner, "third", () => {}));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test("interrupted isolated mutation retains durable lock", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pickla-git-lock-interrupt-"));
+  const remote = join(dir, "remote.git"), runner = join(dir, "runner");
+  const git = (args, cwd = dir) => execFileSync("git", args, { cwd, stdio: "pipe" });
+  try {
+    mkdirSync(runner);
+    git(["init", "--bare", remote]);
+    git(["init", runner]);
+    writeFileSync(join(runner, "README"), "fixture\n");
+    git(["add", "README"], runner);
+    git(["-c", "user.name=test", "-c", "user.email=test@example.test", "commit", "-m", "fixture"], runner);
+    git(["remote", "add", "origin", remote], runner);
+    git(["push", "origin", "HEAD:refs/heads/main"], runner);
+    assert.throws(() => withIsolatedTargetLock(runner, "interrupted", () => { throw new Error("deployment state unknown"); }), /deployment state unknown/);
+    assert.throws(() => withIsolatedTargetLock(runner, "next", () => {}), /locked by interrupted/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 test("missing Stage credential reports names only", () => {
   const value = "fixture-secret-placeholder";
   const missing = missingStageCredentials({ STRIPE_TEST_SECRET_KEY: value });

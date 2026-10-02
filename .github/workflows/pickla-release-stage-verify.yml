@@ -6,14 +6,46 @@ on:
         description: Inspected release ID
         required: true
         type: string
-permissions:
-  contents: write
 concurrency:
   group: pickla-stage-v1
   cancel-in-progress: false
 jobs:
-  stage_verify:
+  local_gates:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      candidate_sha: ${{ steps.record.outputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load immutable candidate record
+        id: record
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          [[ "$RELEASE_ID" =~ ^rel-[0-9a-f]{12}-[0-9a-f]{8}$ ]]
+          git fetch origin refs/heads/pickla-release-registry:refs/remotes/origin/pickla-release-registry
+          mkdir -p .pickla-release-v1
+          git show "origin/pickla-release-registry:records/${RELEASE_ID}.json" > ".pickla-release-v1/${RELEASE_ID}.json"
+          CANDIDATE_SHA="$(node -p "JSON.parse(require('fs').readFileSync('.pickla-release-v1/${RELEASE_ID}.json')).candidate_sha")"
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+          git fetch origin "$CANDIDATE_SHA"
+      - name: Run candidate local gates without Stage credentials
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          npm ci --ignore-scripts
+          node scripts/pickla-release.mjs verify-local "$RELEASE_ID"
+  stage_verify:
+    needs: local_gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     environment: pickla-release-certification
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -42,9 +74,10 @@ jobs:
       - name: Verify isolated evidence
         env:
           RELEASE_ID: ${{ inputs.release_id }}
+          PICKLA_LOCAL_GATE_SHA: ${{ needs.local_gates.outputs.candidate_sha }}
           STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
           STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
         run: |
-          node scripts/pickla-release.mjs verify "$RELEASE_ID"
+          node scripts/pickla-release.mjs verify-stage "$RELEASE_ID"
           node scripts/release-registry-sync.mjs

@@ -12,6 +12,7 @@ export function withIsolatedTargetLock(root, releaseId, action) {
   const origin = git(["remote", "get-url", "origin"], root);
   const work = mkdtempSync(join(tmpdir(), "pickla-isolated-lock-"));
   let acquired = false;
+  let completed = false;
   const commit = (status) => {
     writeFileSync(join(work, "lock.json"), `${JSON.stringify({ target: "byuwuoivuuklcwmoesrx", release_id: releaseId, status, at: new Date().toISOString() })}\n`);
     git(["add", "lock.json"], work);
@@ -35,10 +36,14 @@ export function withIsolatedTargetLock(root, releaseId, action) {
     }
     try { commit("held"); } catch (error) { throw new Error(`isolated target lock push failed: ${String(error.stderr || "concurrent compare-and-swap rejected").trim().slice(0, 300)}`); }
     acquired = true;
-    return action();
+    const result = action();
+    completed = true;
+    return result;
   } finally {
     try {
-      if (acquired) commit("free");
+      // An exception may happen after the target was partially mutated. Keep
+      // the durable lock held until an operator reconciles that state.
+      if (acquired && completed) commit("free");
     } finally {
       rmSync(work, { recursive: true, force: true });
     }
