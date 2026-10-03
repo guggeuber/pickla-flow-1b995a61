@@ -94,7 +94,7 @@
   "evidence": {},
   "status": "BLOCKED",
   "blockers": [
-    "isolated deployed-behavior gate failed: Command failed: node /home/runner/work/pickla-flow-1b995a61/pickla-flow-1b995a61/scripts/release-studentpris-harness.mjs run\n{\"status\":\"FAIL\",\"reason\":\"isolated test branch SQL failed\"}\n",
+    "isolated deployed-behavior gate failed: Command failed: node /home/runner/work/pickla-flow-1b995a61/pickla-flow-1b995a61/scripts/release-studentpris-harness.mjs run\n{\"status\":\"FAIL\",\"reason\":\"isolated session pooler identity unavailable\"}\n",
     "price.server_authoritative: blocked (trusted deployed-behavior evidence unavailable)",
     "studentpris.member_matrix: blocked (trusted deployed-behavior evidence unavailable)",
     "open_play.inverse: blocked (trusted deployed-behavior evidence unavailable)",
@@ -102,7 +102,7 @@
     "stripe.test_amount: blocked (real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured)"
   ],
   "created_at": "2026-10-03T22:13:04.013Z",
-  "updated_at": "2026-10-03T22:53:12.713Z",
+  "updated_at": "2026-10-03T23:13:21.803Z",
   "events": [
     {
       "event": "INSPECTED",
