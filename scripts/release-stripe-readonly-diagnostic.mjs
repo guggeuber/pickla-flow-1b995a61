@@ -79,7 +79,21 @@ if (sessionIds.length === 1) {
             }
           }
         }
-        result.browser = { navigation, final_host: new URL(page.url()).hostname, frame_hosts: [...new Set(page.frames().map((frame) => { try { return new URL(frame.url()).hostname; } catch { return "unloaded"; } }))], visible_fields: visible, submit_top_level_count: submitTopLevel, submit_frame_host: submitFrameHost, filled_fields: filled, failed_requests: failures.slice(0, 8) };
+        const submitButton = page.locator(selectors.submit).last();
+        const submitEnabled = await submitButton.count() ? await submitButton.isEnabled() : false;
+        let invalidVisibleInputs = 0;
+        let requiredVisibleInputs = 0;
+        for (const frame of page.frames()) {
+          const inputs = frame.locator("input");
+          for (let i = 0; i < Math.min(await inputs.count(), 30); i++) {
+            const input = inputs.nth(i);
+            if (!await input.isVisible()) continue;
+            const state = await input.evaluate((element) => ({ required: element.required, valid: element.validity?.valid ?? true }));
+            if (state.required) requiredVisibleInputs++;
+            if (!state.valid) invalidVisibleInputs++;
+          }
+        }
+        result.browser = { navigation, final_host: new URL(page.url()).hostname, frame_hosts: [...new Set(page.frames().map((frame) => { try { return new URL(frame.url()).hostname; } catch { return "unloaded"; } }))], visible_fields: visible, submit_top_level_count: submitTopLevel, submit_frame_host: submitFrameHost, submit_enabled_after_fill: submitEnabled, required_visible_input_count: requiredVisibleInputs, invalid_visible_input_count: invalidVisibleInputs, filled_fields: filled, failed_requests: failures.slice(0, 8) };
       } finally { await browser.close(); }
     }
     if (session.payment_intent?.id && session.payment_intent.livemode === false) {
