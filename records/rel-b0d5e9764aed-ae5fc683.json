@@ -94,7 +94,7 @@
   "evidence": {},
   "status": "BLOCKED",
   "blockers": [
-    "isolated deployed-behavior gate failed: Command failed: node /home/runner/work/pickla-flow-1b995a61/pickla-flow-1b995a61/scripts/release-studentpris-harness.mjs run\n{\"status\":\"FAIL\",\"reason\":\"Command failed: npx --yes supabase@2.113.0 branches get byuwuoivuuklcwmoesrx --project-ref ptnvhbniiiapzbyofctg --output json\\n\\u001b[31munexpected get pooler status 403: {\\\"message\\\":\\\"Missing required permission(s): database_pooling_config_read\\\",\\\"error\\\":{\\\"missing_permissions\\\":[\\\"database_pooling_config_read\\\"]}}\\u001b[39m\\nTry rerunning the command with --debug to troubleshoot the error.\\n\"}\n",
+    "isolated deployed-behavior gate failed: Command failed: node /home/runner/work/pickla-flow-1b995a61/pickla-flow-1b995a61/scripts/release-studentpris-harness.mjs run\n{\"status\":\"FAIL\",\"reason\":\"isolated test branch SQL failed\"}\n",
     "price.server_authoritative: blocked (trusted deployed-behavior evidence unavailable)",
     "studentpris.member_matrix: blocked (trusted deployed-behavior evidence unavailable)",
     "open_play.inverse: blocked (trusted deployed-behavior evidence unavailable)",
@@ -102,7 +102,7 @@
     "stripe.test_amount: blocked (real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured)"
   ],
   "created_at": "2026-10-03T22:13:04.013Z",
-  "updated_at": "2026-10-03T22:33:25.723Z",
+  "updated_at": "2026-10-03T22:53:12.713Z",
   "events": [
     {
       "event": "INSPECTED",
