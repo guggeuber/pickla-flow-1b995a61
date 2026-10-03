@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -59,5 +59,44 @@ test("Vercel CLI failure never puts its token into the release error", () => {
     assert.equal(result.status, 0);
     assert.match(result.stdout, /Vercel list operation failed/);
     assert.ok(!`${result.stdout}${result.stderr}`.includes(token));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("protected Preview bypass is available only to Vercel curl subprocesses", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pickla-vercel-bypass-test-"));
+  try {
+    const capture = join(directory, "calls.jsonl");
+    const executable = join(directory, "npx");
+    const url = "pickla-flow-abc.vercel.app";
+    const deploymentId = "dpl_SYNTHETIC";
+    writeFileSync(executable, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const command = args[2];
+fs.appendFileSync(process.env.PICKLA_CAPTURE_PATH, JSON.stringify({ command, bypass: Boolean(process.env.VERCEL_AUTOMATION_BYPASS_SECRET) }) + "\\n");
+if (command === "list") console.log(JSON.stringify({ deployments: [{ state: "READY", url: ${JSON.stringify(url)}, createdAt: ${preview.createdAt}, meta: { githubCommitSha: ${JSON.stringify(sha)}, githubCommitRef: ${JSON.stringify(target.preview_git_branch)} } }] }));
+else if (command === "inspect") console.log(JSON.stringify({ id: ${JSON.stringify(deploymentId)}, url: ${JSON.stringify(url)}, target: "preview", readyState: "READY" }));
+else if (command === "curl") {
+  const endpoint = args[3];
+  if (endpoint.includes("/api/release")) process.stdout.write("HTTP/2 200\\r\\nage: 0\\r\\ncache-control: private, no-store\\r\\n\\r\\n" + JSON.stringify({ sha: ${JSON.stringify(sha)}, deployment_id: ${JSON.stringify(deploymentId)}, deployment_url: ${JSON.stringify(url)}, environment: "preview", request_id: "release-${sha.slice(0, 16)}" }));
+  else if (endpoint.endsWith(".js")) process.stdout.write("https://byuwuoivuuklcwmoesrx.supabase.co");
+  else process.stdout.write('<script src="/assets/app.js"></script>');
+} else process.exit(5);
+`);
+    chmodSync(executable, 0o755);
+    const moduleUrl = new URL("./release-isolated-preview.mjs", import.meta.url).href;
+    const code = `import { discoverExactPreview } from ${JSON.stringify(moduleUrl)}; const result = discoverExactPreview(${JSON.stringify({ ...target, supabase_ref: "byuwuoivuuklcwmoesrx" })}, ${JSON.stringify(sha)}, "synthetic-token", ${JSON.stringify(deploymentId)}); console.log(result.served_sha);`;
+    const bypass = "synthetic-bypass";
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
+      encoding: "utf8", cwd: fileURLToPath(new URL("../", import.meta.url)),
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, PICKLA_CAPTURE_PATH: capture, VERCEL_AUTOMATION_BYPASS_SECRET: bypass },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), sha);
+    const calls = readFileSync(capture, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(calls.some((call) => call.command === "curl"));
+    assert.ok(calls.filter((call) => call.command === "curl").every((call) => call.bypass));
+    assert.ok(calls.filter((call) => call.command !== "curl").every((call) => !call.bypass));
+    assert.ok(!`${result.stdout}${result.stderr}${readFileSync(capture, "utf8")}`.includes(bypass));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

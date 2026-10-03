@@ -2,7 +2,7 @@ name: Pickla Release V1 isolated bootstrap
 on:
   push:
     tags:
-      - pickla-release-bootstrap-v1
+      - pickla-release-bootstrap-v1-bypass
 permissions:
   contents: read
 concurrency:
@@ -27,15 +27,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PICKLA_BOOTSTRAP_REQUEST: reviewed_tag_v1
         run: |
-          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-bypass
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           gh auth setup-git
-          git fetch origin 22c01b41861db8423dee578c048048a660fff50b
-          node scripts/pickla-release.mjs inspect 22c01b41861db8423dee578c048048a660fff50b
+          git fetch origin ec1e1f328f0a6bb83c132c1ad49b84c33a417d0d
+          node scripts/pickla-release.mjs inspect ec1e1f328f0a6bb83c132c1ad49b84c33a417d0d
           RELEASE_ID="$(find .pickla-release-v1 -maxdepth 1 -name 'rel-*.json' -print -quit | sed 's|.*/||;s|\.json$||')"
           [[ "$RELEASE_ID" =~ ^rel-[0-9a-f]{12}-[0-9a-f]{8}$ ]]
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
-          echo "candidate_sha=22c01b41861db8423dee578c048048a660fff50b" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=ec1e1f328f0a6bb83c132c1ad49b84c33a417d0d" >> "$GITHUB_OUTPUT"
           node scripts/release-registry-sync.mjs
   local_gates:
     needs: inspect
@@ -78,7 +78,7 @@ jobs:
           RELEASE_ID: ${{ needs.inspect.outputs.release_id }}
           PICKLA_BOOTSTRAP_SHA: ${{ vars.PICKLA_BOOTSTRAP_SHA }}
         run: |
-          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-bypass
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$PICKLA_BOOTSTRAP_SHA" = "$GITHUB_SHA"
           [[ "$RELEASE_ID" =~ ^rel-[0-9a-f]{12}-[0-9a-f]{8}$ ]]
@@ -95,6 +95,7 @@ jobs:
           RELEASE_ID: ${{ needs.inspect.outputs.release_id }}
           PICKLA_BOOTSTRAP_SHA: ${{ vars.PICKLA_BOOTSTRAP_SHA }}
           STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
           STRIPE_TEST_WEBHOOK_SECRET: ${{ secrets.STRIPE_TEST_WEBHOOK_SECRET }}
@@ -106,6 +107,7 @@ jobs:
           PICKLA_BOOTSTRAP_SHA: ${{ vars.PICKLA_BOOTSTRAP_SHA }}
           PICKLA_LOCAL_GATE_SHA: ${{ needs.inspect.outputs.candidate_sha }}
           STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
         run: node scripts/pickla-release.mjs verify-stage "$RELEASE_ID"
