@@ -61,15 +61,29 @@
   },
   "recovery_reference": null,
   "evidence": {},
-  "status": "INSPECTED",
-  "blockers": [],
+  "status": "BLOCKED",
+  "blockers": [
+    "isolated target requires reconciliation: Vercel curl operation failed"
+  ],
   "created_at": "2026-10-03T21:44:00.188Z",
-  "updated_at": "2026-10-03T21:44:00.194Z",
+  "updated_at": "2026-10-03T21:50:19.502Z",
   "events": [
     {
       "event": "INSPECTED",
       "key": "ec1e1f328f0a6bb83c132c1ad49b84c33a417d0d",
       "at": "2026-10-03T21:44:00.194Z"
+    },
+    {
+      "event": "BLOCKED",
+      "key": "stage-adapter",
+      "at": "2026-10-03T21:50:19.491Z",
+      "reason": "exact-SHA preview state uncertain: Vercel curl operation failed"
+    },
+    {
+      "event": "BLOCKED",
+      "key": "stage-reconcile",
+      "at": "2026-10-03T21:50:19.502Z",
+      "reason": "isolated target requires reconciliation: Vercel curl operation failed"
     }
   ]
 }
