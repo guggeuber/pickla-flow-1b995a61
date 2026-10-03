@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { chromium } from "playwright";
 import { isolatedConnection, isolatedQuery } from "./release-isolated-db.mjs";
 
 const target = JSON.parse(readFileSync(new URL("../release/stage-targets.json", import.meta.url))).targets[0];
@@ -26,6 +27,40 @@ if (sessionIds.length === 1) {
     result.stripe_amount_minor = session.amount_total;
     result.stripe_payment_status = session.payment_status;
     result.stripe_session_status = session.status;
+    if (process.env.PICKLA_DIAGNOSE_BROWSER === "true") {
+      const checkout = new URL(session.url);
+      if (checkout.hostname !== "checkout.stripe.com" || session.livemode !== false || session.amount_total !== 5900 || session.payment_status !== "unpaid" || session.status !== "open") throw new Error("existing TEST Checkout is not safe for read-only browser diagnosis");
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const page = await browser.newPage();
+        const failures = [];
+        page.on("requestfailed", (request) => {
+          try { failures.push({ host: new URL(request.url()).hostname, kind: request.failure()?.includes("TIMED_OUT") ? "timeout" : "request_failed" }); } catch { /* no URL contents */ }
+        });
+        let navigation;
+        try {
+          const response = await page.goto(checkout.href, { waitUntil: "domcontentloaded", timeout: 60000 });
+          navigation = { result: "loaded", http_status: response?.status() ?? null, host: new URL(page.url()).hostname };
+        } catch (error) {
+          navigation = { result: error.name === "TimeoutError" ? "timeout" : "failed", host: new URL(page.url()).hostname };
+        }
+        await page.waitForTimeout(10000);
+        const selectors = {
+          email: 'input[type="email"], input[name="email"]',
+          card_number: 'input[name="cardNumber"], input[name="cardnumber"], input[autocomplete="cc-number"]',
+          expiry: 'input[name="cardExpiry"], input[name="exp-date"], input[autocomplete="cc-exp"]',
+          cvc: 'input[name="cardCvc"], input[name="cvc"], input[autocomplete="cc-csc"]',
+          submit: 'button[type="submit"]',
+        };
+        const visible = Object.fromEntries(Object.keys(selectors).map((name) => [name, 0]));
+        for (const frame of page.frames()) for (const [name, selector] of Object.entries(selectors)) {
+          const input = frame.locator(selector);
+          const count = await input.count();
+          for (let i = 0; i < Math.min(count, 4); i++) if (await input.nth(i).isVisible()) visible[name]++;
+        }
+        result.browser = { navigation, final_host: new URL(page.url()).hostname, frame_hosts: [...new Set(page.frames().map((frame) => { try { return new URL(frame.url()).hostname; } catch { return "unloaded"; } }))], visible_fields: visible, failed_requests: failures.slice(0, 8) };
+      } finally { await browser.close(); }
+    }
     if (session.payment_intent?.id && session.payment_intent.livemode === false) {
       const chargeResponse = await fetch(`https://api.stripe.com/v1/charges?payment_intent=${encodeURIComponent(session.payment_intent.id)}&limit=10`, {
         headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(30000),
