@@ -16,7 +16,9 @@ export function selectIsolatedSessionPooler(data, target) {
       !["postgres:", "postgresql:"].includes(pooler.protocol) || !/^[a-z0-9-]+\.pooler\.supabase\.com$/.test(pooler.hostname) ||
       decodeURIComponent(pooler.username) !== `postgres.${branchRef}` || !["5432", "6543"].includes(pooler.port) ||
       pooler.pathname !== "/postgres" || decodeURIComponent(pooler.password) !== decodeURIComponent(direct.password) ||
-      pooler.search || pooler.hash) throw new Error("isolated session pooler identity unavailable");
+      pooler.hash) throw new Error("isolated session pooler identity unavailable");
+  // The CLI appends connect_timeout (and possibly pooler runtime options).
+  // We pass only validated host, port, user, database and password to psql.
   // The control-plane pooler host and branch-qualified user are authoritative.
   // Port 5432 on that host is Supavisor session mode, including when the
   // control plane's generic pooled URL points at transaction mode on 6543.

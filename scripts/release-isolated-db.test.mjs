@@ -7,7 +7,7 @@ const target = { supabase_ref: ref, supabase_parent_ref: "ptnvhbniiiapzbyofctg",
 const response = {
   SUPABASE_URL: `https://${ref}.supabase.co`, SUPABASE_JWT_SECRET: "synthetic-jwt", SUPABASE_ANON_KEY: "synthetic-anon",
   POSTGRES_URL_NON_POOLING: `postgresql://postgres:synthetic-password@db.${ref}.supabase.co:5432/postgres`,
-  POSTGRES_URL: `postgresql://postgres.${ref}:synthetic-password@aws-0-eu-north-1.pooler.supabase.com:6543/postgres`,
+  POSTGRES_URL: `postgresql://postgres.${ref}:synthetic-password@aws-0-eu-north-1.pooler.supabase.com:6543/postgres?connect_timeout=10`,
 };
 
 test("trusted control-plane pooler URL becomes branch-bound session mode", () => {
