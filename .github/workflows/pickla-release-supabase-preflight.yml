@@ -1,0 +1,24 @@
+name: Pickla Release V1 Supabase read-only preflight
+on:
+  push:
+    tags:
+      - pickla-release-bootstrap-v1-preflight
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    environment: pickla-release-certification
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify trusted immutable tag
+        run: |
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-preflight
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Check every read-only branches get route, then pinned CLI
+        env:
+          STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
+        run: node scripts/release-supabase-preflight.mjs
