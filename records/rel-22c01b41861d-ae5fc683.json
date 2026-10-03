@@ -61,10 +61,12 @@
   },
   "recovery_reference": null,
   "evidence": {},
-  "status": "INSPECTED",
-  "blockers": [],
+  "status": "BLOCKED",
+  "blockers": [
+    "isolated target requires reconciliation: Vercel list operation failed"
+  ],
   "created_at": "2026-10-03T20:51:29.007Z",
-  "updated_at": "2026-10-03T20:51:29.015Z",
+  "updated_at": "2026-10-03T20:55:30.191Z",
   "events": [
     {
       "event": "INSPECTED",
@@ -88,6 +90,12 @@
       "key": "stage-adapter",
       "at": "2026-10-02T14:54:00.928Z",
       "reason": "exact-SHA preview unavailable: Command failed: npx --yes supabase@2.113.0 branches list --project-ref ptnvhbniiiapzbyofctg --output json\n\u001b[31munexpected list branch status 403: {\"message\":\"Your account does not have the necessary privileges to access this endpoint. For more details, refer to our documentation https://supabase.com/docs/guides/platform/access-control\"}\u001b[39m\nTry rerunning the command with --debug to troubleshoot the error.\n"
+    },
+    {
+      "event": "BLOCKED",
+      "key": "stage-reconcile",
+      "at": "2026-10-03T20:55:30.191Z",
+      "reason": "isolated target requires reconciliation: Vercel list operation failed"
     }
   ]
 }
