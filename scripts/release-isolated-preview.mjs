@@ -9,10 +9,7 @@ function vercel(args, token, input) {
   const after = separator < 0 ? [] : args.slice(separator);
   const safeEnv = { ...process.env };
   for (const name of ["STRIPE_TEST_SECRET_KEY", "STRIPE_TEST_WEBHOOK_SECRET", "STAGE_SUPABASE_ACCESS_TOKEN", "SUPABASE_ACCESS_TOKEN", "STAGE_VERCEL_TOKEN"]) delete safeEnv[name];
-  const bypass = safeEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
   delete safeEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
-  // Vercel CLI reads this only for protected Preview requests.
-  if (args[0] === "curl" && bypass) safeEnv.VERCEL_AUTOMATION_BYPASS_SECRET = bypass;
   try {
     return execFileSync("npx", [...cli, ...before, "--scope", "gunnar-picklaats-projects", ...(token ? ["--token", token] : []), ...after], {
       encoding: "utf8", timeout: 90000, maxBuffer: 4 * 1024 * 1024,
@@ -24,6 +21,24 @@ function vercel(args, token, input) {
     // Node's child-process error includes the full command, including the
     // token argument. Never allow it into a release record or Actions log.
     throw new Error(`Vercel ${args[0]} operation failed`);
+  }
+}
+
+function protectedPreviewGet(url, includeHeaders = false) {
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (!bypass || /[\r\n"\\]/.test(bypass)) throw new Error("Vercel automation bypass unavailable");
+  const safeEnv = { ...process.env };
+  for (const name of ["VERCEL_AUTOMATION_BYPASS_SECRET", "STAGE_VERCEL_TOKEN", "STAGE_SUPABASE_ACCESS_TOKEN", "STRIPE_TEST_SECRET_KEY", "STRIPE_TEST_WEBHOOK_SECRET", "SUPABASE_ACCESS_TOKEN"]) delete safeEnv[name];
+  try {
+    // Vercel's documented x-vercel-protection-bypass header is supplied over
+    // stdin, never in argv, an environment variable or a temporary file.
+    return execFileSync("curl", ["--config", "-", "--proto", "=https", "--silent", "--show-error", "--fail", "--max-time", "30", ...(includeHeaders ? ["--include"] : []), url], {
+      input: `header = "x-vercel-protection-bypass: ${bypass}"\n`,
+      encoding: "utf8", timeout: 35000, maxBuffer: 4 * 1024 * 1024,
+      env: safeEnv, stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch {
+    throw new Error("protected Preview request failed");
   }
 }
 
@@ -92,13 +107,13 @@ export function discoverExactPreview(target, sha, token = process.env.STAGE_VERC
   if (identified && details.id !== deploymentId) throw new Error("Preview URL resolved to another deployment ID");
   if (details.readyState !== "READY" || details.target !== "preview" || !/^dpl_[A-Za-z0-9]+$/.test(details.id || "") || details.url !== candidate.url) throw new Error("Vercel deployment identity mismatch");
   const requestId = `release-${sha.slice(0, 16)}`;
-  const response = vercel(["curl", `https://${candidate.url}/api/release?request_id=${requestId}`, "--", "--include", "--silent"], token);
+  const response = protectedPreviewGet(`https://${candidate.url}/api/release?request_id=${requestId}`, true);
   const served = parseServedRelease(response);
   if (served.sha !== sha || served.deployment_id !== details.id || served.deployment_url !== candidate.url || served.environment !== "preview" || served.request_id !== requestId) throw new Error("served preview release identity mismatch");
-  const html = vercel(["curl", `https://${candidate.url}/`, "--", "--silent"], token);
+  const html = protectedPreviewGet(`https://${candidate.url}/`);
   const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+\.js)"/g)].map((match) => match[1]);
   if (!assets.length) throw new Error("preview build has no inspectable application bundle");
-  const bundles = assets.map((asset) => vercel(["curl", `https://${candidate.url}${asset}`, "--", "--silent"], token));
+  const bundles = assets.map((asset) => protectedPreviewGet(`https://${candidate.url}${asset}`));
   if (!bundles.some((bundle) => bundle.includes(`https://${target.supabase_ref}.supabase.co`))) throw new Error("preview does not contain isolated Supabase URL");
   if (bundles.some((bundle) => bundle.includes("https://ptnvhbniiiapzbyofctg.supabase.co") || bundle.includes("https://anpxxnpevtxhiajxmfji.supabase.co"))) throw new Error("preview contains protected Supabase URL");
   return { vercel_project_id: target.vercel_project_id, vercel_deployment_id: details.id, deployment_url: candidate.url, served_sha: served.sha, environment: served.environment, preview_git_branch: target.preview_git_branch, built_at: served.built_at, verified_at: new Date().toISOString() };
