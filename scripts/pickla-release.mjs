@@ -82,7 +82,7 @@ function mainGuard(record) {
 function trustedMain(record) {
   if (record.bootstrap_trust) {
     const originalTag = "pickla-release-bootstrap-v1-edge";
-    const resumeTag = "pickla-release-bootstrap-v1-resume";
+    const resumeTag = "pickla-release-bootstrap-v1-pooler";
     const isResume = process.env.GITHUB_REF === `refs/tags/${resumeTag}`;
     const tag = isResume ? resumeTag : originalTag;
     const sha = git(["rev-parse", "HEAD"]);
@@ -93,7 +93,7 @@ function trustedMain(record) {
     try {
       if (git(["ls-remote", "origin", `refs/tags/${tag}`]).split("\t")[0] !== sha) return false;
       const rulesets = JSON.parse(execFileSync("gh", ["api", "repos/guggeuber/pickla-flow-1b995a61/rulesets?targets=tag"], { cwd: root, encoding: "utf8", timeout: 30000 }));
-      const rule = rulesets.find((value) => value.name === `pickla-release-bootstrap-v1-${isResume ? "resume" : "edge"}-immutable` && value.enforcement === "active" && value.target === "tag");
+      const rule = rulesets.find((value) => value.name === `pickla-release-bootstrap-v1-${isResume ? "pooler" : "edge"}-immutable` && value.enforcement === "active" && value.target === "tag");
       if (!rule) return false;
       const details = JSON.parse(execFileSync("gh", ["api", `repos/guggeuber/pickla-flow-1b995a61/rulesets/${rule.id}`], { cwd: root, encoding: "utf8", timeout: 30000 }));
       return details.conditions?.ref_name?.include?.includes(`refs/tags/${tag}`) && ["update", "deletion"].every((type) => details.rules?.some((item) => item.type === type)) && !details.bypass_actors?.length;

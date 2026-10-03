@@ -2,7 +2,7 @@ name: Pickla Release V1 verify existing isolated Stage
 on:
   push:
     tags:
-      - pickla-release-bootstrap-v1-resume
+      - pickla-release-bootstrap-v1-pooler
 permissions:
   contents: read
 concurrency:
@@ -23,7 +23,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-resume
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-pooler
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           gh auth setup-git
           git fetch origin refs/heads/main:refs/remotes/origin/main
