@@ -58,7 +58,28 @@ if (sessionIds.length === 1) {
           const count = await input.count();
           for (let i = 0; i < Math.min(count, 4); i++) if (await input.nth(i).isVisible()) visible[name]++;
         }
-        result.browser = { navigation, final_host: new URL(page.url()).hostname, frame_hosts: [...new Set(page.frames().map((frame) => { try { return new URL(frame.url()).hostname; } catch { return "unloaded"; } }))], visible_fields: visible, failed_requests: failures.slice(0, 8) };
+        const submitTopLevel = await page.locator(selectors.submit).count();
+        let submitFrameHost = "absent";
+        for (const frame of page.frames()) if (await frame.locator(selectors.submit).count() && await frame.locator(selectors.submit).first().isVisible()) {
+          submitFrameHost = new URL(frame.url()).hostname;
+          break;
+        }
+        const filled = {};
+        if (process.env.PICKLA_DIAGNOSE_FILL === "true") {
+          const values = { email: "student-hotfix-nonmember-5403bc75@example.test", card_number: "4242424242424242", expiry: "1234", cvc: "123" };
+          for (const [name, value] of Object.entries(values)) {
+            filled[name] = "unavailable";
+            for (const frame of page.frames()) {
+              const input = frame.locator(selectors[name]).first();
+              if (await input.count() && await input.isVisible()) {
+                try { await input.fill(value, { timeout: 10000 }); filled[name] = "filled"; }
+                catch (error) { filled[name] = error.name === "TimeoutError" ? "fill_timeout" : "fill_failed"; }
+                break;
+              }
+            }
+          }
+        }
+        result.browser = { navigation, final_host: new URL(page.url()).hostname, frame_hosts: [...new Set(page.frames().map((frame) => { try { return new URL(frame.url()).hostname; } catch { return "unloaded"; } }))], visible_fields: visible, submit_top_level_count: submitTopLevel, submit_frame_host: submitFrameHost, filled_fields: filled, failed_requests: failures.slice(0, 8) };
       } finally { await browser.close(); }
     }
     if (session.payment_intent?.id && session.payment_intent.livemode === false) {

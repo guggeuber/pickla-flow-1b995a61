@@ -2,7 +2,7 @@ name: Pickla Release V1 Stripe TEST read-only diagnosis
 on:
   push:
     tags:
-      - pickla-release-bootstrap-v1-checkout-ui-diagnostic
+      - pickla-release-bootstrap-v1-checkout-form-diagnostic
 permissions:
   contents: read
 jobs:
@@ -18,7 +18,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-checkout-ui-diagnostic
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-checkout-form-diagnostic
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(gh pr view 4 --repo guggeuber/pickla-flow-1b995a61 --json headRefOid --jq .headRefOid)" = bf739011384f6343061e152a5b81f5b8dba74ada
           git fetch origin bf739011384f6343061e152a5b81f5b8dba74ada
@@ -31,4 +31,5 @@ jobs:
           STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
           PICKLA_DIAGNOSE_BROWSER: "true"
+          PICKLA_DIAGNOSE_FILL: "true"
         run: node scripts/release-stripe-readonly-diagnostic.mjs
