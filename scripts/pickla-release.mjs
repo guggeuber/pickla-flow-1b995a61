@@ -81,13 +81,13 @@ function mainGuard(record) {
 }
 function trustedMain(record) {
   if (record.bootstrap_trust) {
-    const tag = "pickla-release-bootstrap-v1-header";
+    const tag = "pickla-release-bootstrap-v1-edge";
     const sha = git(["rev-parse", "HEAD"]);
     if (record.bootstrap_trust.mode !== "reviewed_tag_v1" || record.bootstrap_trust.ref !== `refs/tags/${tag}` || record.bootstrap_trust.workflow_sha !== sha || process.env.GITHUB_ACTIONS !== "true" || process.env.GITHUB_REF !== `refs/tags/${tag}` || process.env.GITHUB_SHA !== sha || process.env.PICKLA_BOOTSTRAP_SHA !== sha) return false;
     try {
       if (git(["ls-remote", "origin", `refs/tags/${tag}`]).split("\t")[0] !== sha) return false;
       const rulesets = JSON.parse(execFileSync("gh", ["api", "repos/guggeuber/pickla-flow-1b995a61/rulesets?targets=tag"], { cwd: root, encoding: "utf8", timeout: 30000 }));
-      const rule = rulesets.find((value) => value.name === "pickla-release-bootstrap-v1-header-immutable" && value.enforcement === "active" && value.target === "tag");
+      const rule = rulesets.find((value) => value.name === "pickla-release-bootstrap-v1-edge-immutable" && value.enforcement === "active" && value.target === "tag");
       if (!rule) return false;
       const details = JSON.parse(execFileSync("gh", ["api", `repos/guggeuber/pickla-flow-1b995a61/rulesets/${rule.id}`], { cwd: root, encoding: "utf8", timeout: 30000 }));
       return details.conditions?.ref_name?.include?.includes(`refs/tags/${tag}`) && ["update", "deletion"].every((type) => details.rules?.some((item) => item.type === type)) && !details.bypass_actors?.length;
@@ -114,7 +114,7 @@ function inspect(sha) {
     const ids = selectInvariants(classification, policy);
     const id = `rel-${sha.slice(0, 12)}-${digest(`${main}:${digest(policyBytes)}`).slice(0, 8)}`;
     const now = new Date().toISOString();
-    const bootstrapTrust = process.env.PICKLA_BOOTSTRAP_REQUEST === "reviewed_tag_v1" && process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_REF === "refs/tags/pickla-release-bootstrap-v1-header" && process.env.GITHUB_SHA === git(["rev-parse", "HEAD"])
+    const bootstrapTrust = process.env.PICKLA_BOOTSTRAP_REQUEST === "reviewed_tag_v1" && process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_REF === "refs/tags/pickla-release-bootstrap-v1-edge" && process.env.GITHUB_SHA === git(["rev-parse", "HEAD"])
       ? { mode: "reviewed_tag_v1", ref: process.env.GITHUB_REF, workflow_sha: process.env.GITHUB_SHA } : null;
     const record = { schema_version: 1, release_id: id, candidate_sha: sha, base_sha: main, policy_sha: digest(policyBytes), tree_sha: tree, domains: classification.domains, capabilities: classification.capabilities, risk_floor: classification.risk_floor, urgency: "normal", decision: classification.decision, reasons: classification.reasons, affected_edge_functions: classification.edge_functions, edge_manifest: Object.fromEntries(classification.edge_functions.map((name) => [name, digest((edgeGraph(temp).consumers[name] || []).map((path) => readFileSync(join(temp, path))).join("\n"))])), invariants: Object.fromEntries(ids.map((key) => [key, { status: "required" }])), bootstrap_trust: bootstrapTrust, stage: null, intended_production: { vercel: "UNKNOWN", supabase: "UNKNOWN", migrations: "manual-review" }, recovery_reference: null, evidence: {}, status: classification.decision === "NEEDS_REVIEW" ? "BLOCKED" : "INSPECTED", blockers: classification.decision === "NEEDS_REVIEW" ? ["unknown effect needs review"] : [], created_at: now, updated_at: now, events: [] };
     save(record, "INSPECTED", { key: sha });
@@ -159,7 +159,7 @@ function stageLocked(record, id) {
   let previewMutationAttempted = false;
   try {
     const branch = verifyIsolatedBranch(target);
-    const edgeVersions = isolatedFunctionVersions(target);
+    isolatedFunctionVersions(target);
     previewMutationAttempted = true;
     const deploymentId = record.stage?.vercel_deployment_id || createExactPreview(target, record.candidate_sha, id);
     const preview = discoverExactPreview(target, record.candidate_sha, process.env.STAGE_VERCEL_TOKEN, deploymentId);
@@ -169,11 +169,14 @@ function stageLocked(record, id) {
     let stripeConfigured = false;
     if (process.env.STRIPE_TEST_SECRET_KEY && process.env.STRIPE_TEST_WEBHOOK_SECRET) {
       execFileSync("node", [join(root, "scripts/release-stripe-test-config.mjs")], {
-        cwd: root, env: process.env, encoding: "utf8", timeout: 120000,
+        cwd: root, env: withoutVercelBypassEnv(), encoding: "utf8", timeout: 120000,
         stdio: ["ignore", "pipe", "pipe"],
       });
       stripeConfigured = true;
     }
+    // Supabase secret updates advance Edge versions; bind evidence to the
+    // versions that will actually serve the certification requests.
+    const edgeVersions = isolatedFunctionVersions(target);
     // The URL is an immutable Vercel deployment. Supabase is explicit and must
     // be verified independently before any Edge or fixture mutation.
     record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, edge_versions: edgeVersions, fixture_venue_slug: target.fixture_venue_slug, checkout_origin: checkoutOrigin.checkout_origin, stripe_test_credentials_available: stripeConfigured };

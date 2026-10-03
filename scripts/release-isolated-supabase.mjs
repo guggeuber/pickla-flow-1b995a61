@@ -6,6 +6,7 @@ function managementEnv(token) {
   delete env.STRIPE_TEST_SECRET_KEY;
   delete env.STRIPE_TEST_WEBHOOK_SECRET;
   delete env.STAGE_VERCEL_TOKEN;
+  delete env.VERCEL_AUTOMATION_BYPASS_SECRET;
   return env;
 }
 
