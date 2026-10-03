@@ -33,12 +33,12 @@
     "release.identity_exact": {
       "status": "passed",
       "evidence_ref": "github-actions:37157662373:local-gates:b0d5e9764aedcf9ce73c395435b1d23658eec2e5",
-      "at": "2026-10-03T22:19:43.557Z"
+      "at": "2026-10-03T22:33:08.323Z"
     },
     "release.stage_identity_exact": {
       "status": "passed",
       "evidence_ref": "vercel:dpl_7t4DqAU3Lu9S5vvtZkHxGiMVZy9N",
-      "at": "2026-10-03T22:19:28.155Z"
+      "at": "2026-10-03T22:32:55.590Z"
     },
     "studentpris.member_matrix": {
       "status": "blocked",
@@ -70,16 +70,16 @@
     "environment": "preview",
     "preview_git_branch": "codex/release-v1-20261001",
     "built_at": "2026-10-03T22:18:52.199Z",
-    "verified_at": "2026-10-03T22:19:28.155Z",
+    "verified_at": "2026-10-03T22:32:55.590Z",
     "supabase_ref": "byuwuoivuuklcwmoesrx",
     "supabase_branch_id": "4aec1694-5d7d-4691-9228-a03c156371bc",
     "supabase_branch_status": "MIGRATIONS_FAILED",
     "edge_versions": {
-      "api-admin": 89,
-      "api-bookings": 92,
-      "api-event-public": 79,
-      "api-memberships": 34,
-      "api-stripe-webhook": 58
+      "api-admin": 91,
+      "api-bookings": 94,
+      "api-event-public": 81,
+      "api-memberships": 36,
+      "api-stripe-webhook": 60
     },
     "fixture_venue_slug": "student-hotfix-5403bc75",
     "checkout_origin": "https://pickla-flow-1b995a61-rg2ztxgj6-gunnar-picklaats-projects.vercel.app",
@@ -94,7 +94,7 @@
   "evidence": {},
   "status": "BLOCKED",
   "blockers": [
-    "isolated deployed-behavior gate failed: Command failed: node /home/runner/work/pickla-flow-1b995a61/pickla-flow-1b995a61/scripts/release-studentpris-harness.mjs run\n{\"status\":\"FAIL\",\"reason\":\"Command failed: npx --yes supabase@2.113.0 branches get byuwuoivuuklcwmoesrx --project-ref ptnvhbniiiapzbyofctg --output json\\n\\u001b[31munexpected get api keys status 403: {\\\"message\\\":\\\"Missing required permission(s): api_gateway_keys_read\\\",\\\"error\\\":{\\\"missing_permissions\\\":[\\\"api_gateway_keys_read\\\"]}}\\u001b[39m\\nTry rerunning the command with --debug to troubleshoot the error.\\n\"}\n",
+    "isolated deployed-behavior gate failed: Command failed: node /home/runner/work/pickla-flow-1b995a61/pickla-flow-1b995a61/scripts/release-studentpris-harness.mjs run\n{\"status\":\"FAIL\",\"reason\":\"Command failed: npx --yes supabase@2.113.0 branches get byuwuoivuuklcwmoesrx --project-ref ptnvhbniiiapzbyofctg --output json\\n\\u001b[31munexpected get pooler status 403: {\\\"message\\\":\\\"Missing required permission(s): database_pooling_config_read\\\",\\\"error\\\":{\\\"missing_permissions\\\":[\\\"database_pooling_config_read\\\"]}}\\u001b[39m\\nTry rerunning the command with --debug to troubleshoot the error.\\n\"}\n",
     "price.server_authoritative: blocked (trusted deployed-behavior evidence unavailable)",
     "studentpris.member_matrix: blocked (trusted deployed-behavior evidence unavailable)",
     "open_play.inverse: blocked (trusted deployed-behavior evidence unavailable)",
@@ -102,7 +102,7 @@
     "stripe.test_amount: blocked (real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured)"
   ],
   "created_at": "2026-10-03T22:13:04.013Z",
-  "updated_at": "2026-10-03T22:20:03.207Z",
+  "updated_at": "2026-10-03T22:33:25.723Z",
   "events": [
     {
       "event": "INSPECTED",
@@ -133,6 +133,12 @@
       "event": "VERIFIED",
       "key": "e74ef0ca5399116e24eeb657057b26aa80d4b5cc8b0e50e8a8ddcffb9b8c696d",
       "at": "2026-10-03T22:20:03.207Z",
+      "status": "BLOCKED"
+    },
+    {
+      "event": "VERIFIED",
+      "key": "2a172f8e90b0674c6828eb13040459f25dac8552bb8f3de13dc88b9663eab96c",
+      "at": "2026-10-03T22:33:25.723Z",
       "status": "BLOCKED"
     }
   ]
