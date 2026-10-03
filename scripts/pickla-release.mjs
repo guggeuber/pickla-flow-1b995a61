@@ -22,9 +22,14 @@ const shaPattern = /^[0-9a-f]{40}$/;
 const releasePattern = /^rel-[0-9a-f]{12}-[0-9a-f]{8}$/;
 function git(args, cwd = root) { return execFileSync("git", args, { cwd, encoding: "utf8" }).trim(); }
 function withoutStripeEnv() {
-  const safeEnv = { ...process.env };
+  const safeEnv = withoutVercelBypassEnv();
   delete safeEnv.STRIPE_TEST_SECRET_KEY;
   delete safeEnv.STRIPE_TEST_WEBHOOK_SECRET;
+  return safeEnv;
+}
+function withoutVercelBypassEnv() {
+  const safeEnv = { ...process.env };
+  delete safeEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
   return safeEnv;
 }
 function fail(reason) { console.error(JSON.stringify({ status: "BLOCKED", reason })); process.exit(1); }
@@ -223,7 +228,7 @@ function verify(id, mode = "normal") {
         if (process.env.STRIPE_TEST_SECRET_KEY && record.stage.stripe_test_credentials_available && record.invariants["stripe.test_amount"]?.status !== "passed") {
           gate = "stripe";
           const payment = JSON.parse(execFileSync("node", [join(root, "scripts/release-stripe-test-harness.mjs"), "run", current.deployment_url, id], {
-            cwd: root, env: process.env, encoding: "utf8", timeout: 240000, maxBuffer: 1024 * 1024,
+            cwd: root, env: withoutVercelBypassEnv(), encoding: "utf8", timeout: 240000, maxBuffer: 1024 * 1024,
             stdio: ["ignore", "pipe", "pipe"],
           }));
           if (payment.target_ref !== target.supabase_ref || payment.preview_deployment_url !== current.deployment_url || payment.amount_minor !== 5900 || payment.livemode !== false || payment.provider_payment !== "paid" || payment.successful_charge_count !== 1 || payment.registration_count !== 1 || payment.paid_receipt_count !== 1 || payment.paid_ledger_count !== 1 || payment.processed_checkout_webhook_count !== 1) throw new Error("Stripe TEST evidence contract mismatch");

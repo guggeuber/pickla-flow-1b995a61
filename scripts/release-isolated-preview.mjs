@@ -8,7 +8,11 @@ function vercel(args, token, input) {
   const before = separator < 0 ? args : args.slice(0, separator);
   const after = separator < 0 ? [] : args.slice(separator);
   const safeEnv = { ...process.env };
-  for (const name of ["STRIPE_TEST_SECRET_KEY", "STRIPE_TEST_WEBHOOK_SECRET", "STAGE_SUPABASE_ACCESS_TOKEN", "SUPABASE_ACCESS_TOKEN"]) delete safeEnv[name];
+  for (const name of ["STRIPE_TEST_SECRET_KEY", "STRIPE_TEST_WEBHOOK_SECRET", "STAGE_SUPABASE_ACCESS_TOKEN", "SUPABASE_ACCESS_TOKEN", "STAGE_VERCEL_TOKEN"]) delete safeEnv[name];
+  const bypass = safeEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
+  delete safeEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
+  // Vercel CLI reads this only for protected Preview requests.
+  if (args[0] === "curl" && bypass) safeEnv.VERCEL_AUTOMATION_BYPASS_SECRET = bypass;
   try {
     return execFileSync("npx", [...cli, ...before, "--scope", "gunnar-picklaats-projects", ...(token ? ["--token", token] : []), ...after], {
       encoding: "utf8", timeout: 90000, maxBuffer: 4 * 1024 * 1024,

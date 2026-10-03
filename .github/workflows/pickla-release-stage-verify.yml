@@ -69,6 +69,7 @@ jobs:
         env:
           RELEASE_ID: ${{ inputs.release_id }}
           STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
           STRIPE_TEST_WEBHOOK_SECRET: ${{ secrets.STRIPE_TEST_WEBHOOK_SECRET }}
@@ -79,6 +80,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
           PICKLA_LOCAL_GATE_SHA: ${{ needs.local_gates.outputs.candidate_sha }}
           STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
         run: |
