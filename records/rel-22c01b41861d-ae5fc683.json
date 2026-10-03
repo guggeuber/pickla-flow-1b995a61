@@ -61,10 +61,12 @@
   },
   "recovery_reference": null,
   "evidence": {},
-  "status": "INSPECTED",
-  "blockers": [],
+  "status": "BLOCKED",
+  "blockers": [
+    "isolated target requires reconciliation: Vercel curl operation failed"
+  ],
   "created_at": "2026-10-03T21:05:56.591Z",
-  "updated_at": "2026-10-03T21:05:56.599Z",
+  "updated_at": "2026-10-03T21:13:04.693Z",
   "events": [
     {
       "event": "INSPECTED",
