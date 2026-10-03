@@ -81,13 +81,19 @@ function mainGuard(record) {
 }
 function trustedMain(record) {
   if (record.bootstrap_trust) {
-    const tag = "pickla-release-bootstrap-v1-edge";
+    const originalTag = "pickla-release-bootstrap-v1-edge";
+    const resumeTag = "pickla-release-bootstrap-v1-resume";
+    const isResume = process.env.GITHUB_REF === `refs/tags/${resumeTag}`;
+    const tag = isResume ? resumeTag : originalTag;
     const sha = git(["rev-parse", "HEAD"]);
-    if (record.bootstrap_trust.mode !== "reviewed_tag_v1" || record.bootstrap_trust.ref !== `refs/tags/${tag}` || record.bootstrap_trust.workflow_sha !== sha || process.env.GITHUB_ACTIONS !== "true" || process.env.GITHUB_REF !== `refs/tags/${tag}` || process.env.GITHUB_SHA !== sha || process.env.PICKLA_BOOTSTRAP_SHA !== sha) return false;
+    if (record.bootstrap_trust.mode !== "reviewed_tag_v1" || record.bootstrap_trust.ref !== `refs/tags/${originalTag}` || process.env.GITHUB_ACTIONS !== "true" || process.env.GITHUB_REF !== `refs/tags/${tag}` || process.env.GITHUB_SHA !== sha) return false;
+    if (isResume) {
+      if (record.release_id !== "rel-b0d5e9764aed-ae5fc683" || record.bootstrap_trust.workflow_sha !== "b538cbdce937ef8858a6953a8c028d1919a8e363") return false;
+    } else if (record.bootstrap_trust.workflow_sha !== sha || process.env.PICKLA_BOOTSTRAP_SHA !== sha) return false;
     try {
       if (git(["ls-remote", "origin", `refs/tags/${tag}`]).split("\t")[0] !== sha) return false;
       const rulesets = JSON.parse(execFileSync("gh", ["api", "repos/guggeuber/pickla-flow-1b995a61/rulesets?targets=tag"], { cwd: root, encoding: "utf8", timeout: 30000 }));
-      const rule = rulesets.find((value) => value.name === "pickla-release-bootstrap-v1-edge-immutable" && value.enforcement === "active" && value.target === "tag");
+      const rule = rulesets.find((value) => value.name === `pickla-release-bootstrap-v1-${isResume ? "resume" : "edge"}-immutable` && value.enforcement === "active" && value.target === "tag");
       if (!rule) return false;
       const details = JSON.parse(execFileSync("gh", ["api", `repos/guggeuber/pickla-flow-1b995a61/rulesets/${rule.id}`], { cwd: root, encoding: "utf8", timeout: 30000 }));
       return details.conditions?.ref_name?.include?.includes(`refs/tags/${tag}`) && ["update", "deletion"].every((type) => details.rules?.some((item) => item.type === type)) && !details.bypass_actors?.length;
