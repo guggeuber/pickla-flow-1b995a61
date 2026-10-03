@@ -27,8 +27,9 @@
   "edge_manifest": {},
   "invariants": {
     "price.server_authoritative": {
-      "status": "blocked",
-      "reason": "trusted deployed-behavior evidence unavailable"
+      "status": "passed",
+      "evidence_ref": "record:evidence.studentpris#ee603dc7242e31177a357c09e63d0710ce48d62f62ceee59fbc9b203f2f3b908",
+      "at": "2026-10-03T23:24:36.038Z"
     },
     "release.identity_exact": {
       "status": "passed",
@@ -41,16 +42,19 @@
       "at": "2026-10-03T22:32:55.590Z"
     },
     "studentpris.member_matrix": {
-      "status": "blocked",
-      "reason": "trusted deployed-behavior evidence unavailable"
+      "status": "passed",
+      "evidence_ref": "record:evidence.studentpris#ee603dc7242e31177a357c09e63d0710ce48d62f62ceee59fbc9b203f2f3b908",
+      "at": "2026-10-03T23:24:36.038Z"
     },
     "open_play.inverse": {
-      "status": "blocked",
-      "reason": "trusted deployed-behavior evidence unavailable"
+      "status": "passed",
+      "evidence_ref": "record:evidence.studentpris#ee603dc7242e31177a357c09e63d0710ce48d62f62ceee59fbc9b203f2f3b908",
+      "at": "2026-10-03T23:24:36.038Z"
     },
     "studentpris.admin_save_reload": {
-      "status": "blocked",
-      "reason": "trusted deployed-behavior evidence unavailable"
+      "status": "passed",
+      "evidence_ref": "record:evidence.studentpris#ee603dc7242e31177a357c09e63d0710ce48d62f62ceee59fbc9b203f2f3b908",
+      "at": "2026-10-03T23:24:36.038Z"
     },
     "stripe.test_amount": {
       "status": "blocked",
@@ -91,18 +95,39 @@
     "migrations": "manual-review"
   },
   "recovery_reference": null,
-  "evidence": {},
+  "evidence": {
+    "studentpris": {
+      "target_ref": "byuwuoivuuklcwmoesrx",
+      "venue_slug": "student-hotfix-5403bc75",
+      "date": "2026-10-13",
+      "student_session_id": "b4bf1691-8f9c-463b-b7eb-57bb7b1fcae0",
+      "normal_session_id": "f1a6e8af-473a-4390-ab3d-bc8c848ebf1b",
+      "admin_save_reload": "PASS",
+      "studentpris_member_matrix": {
+        "non-member": 59,
+        "Play": 59,
+        "Play+": 59,
+        "Founder": 59
+      },
+      "normal_open_play_inverse": {
+        "non-member": 165,
+        "Play": 99,
+        "Play+": 0,
+        "Founder": 0
+      },
+      "explicit_studentpris_play_price_sek": 49,
+      "temporary_rule_removed": true,
+      "observed_at": "2026-10-03T23:24:36.038Z",
+      "sha256": "ee603dc7242e31177a357c09e63d0710ce48d62f62ceee59fbc9b203f2f3b908"
+    }
+  },
   "status": "BLOCKED",
   "blockers": [
-    "isolated deployed-behavior gate failed: Command failed: node /home/runner/work/pickla-flow-1b995a61/pickla-flow-1b995a61/scripts/release-studentpris-harness.mjs run\n{\"status\":\"FAIL\",\"reason\":\"isolated session pooler identity unavailable\"}\n",
-    "price.server_authoritative: blocked (trusted deployed-behavior evidence unavailable)",
-    "studentpris.member_matrix: blocked (trusted deployed-behavior evidence unavailable)",
-    "open_play.inverse: blocked (trusted deployed-behavior evidence unavailable)",
-    "studentpris.admin_save_reload: blocked (trusted deployed-behavior evidence unavailable)",
+    "trusted Stripe TEST payment or canonical Pickla result did not verify; isolated target lock held for reconciliation",
     "stripe.test_amount: blocked (real Stripe TEST checkout unavailable: isolated STRIPE_SECRET_KEY and trusted STRIPE_TEST_SECRET_KEY not configured)"
   ],
   "created_at": "2026-10-03T22:13:04.013Z",
-  "updated_at": "2026-10-03T23:13:21.803Z",
+  "updated_at": "2026-10-03T23:25:53.041Z",
   "events": [
     {
       "event": "INSPECTED",
@@ -139,6 +164,19 @@
       "event": "VERIFIED",
       "key": "2a172f8e90b0674c6828eb13040459f25dac8552bb8f3de13dc88b9663eab96c",
       "at": "2026-10-03T22:33:25.723Z",
+      "status": "BLOCKED"
+    },
+    {
+      "event": "EVIDENCE",
+      "key": "ee603dc7242e31177a357c09e63d0710ce48d62f62ceee59fbc9b203f2f3b908",
+      "at": "2026-10-03T23:24:36.046Z",
+      "scope": "isolated-studentpris",
+      "digest": "ee603dc7242e31177a357c09e63d0710ce48d62f62ceee59fbc9b203f2f3b908"
+    },
+    {
+      "event": "VERIFIED",
+      "key": "05b7dd8c9047153670e1d66a492200c02d09ec0cb21bd6852c4c6237baf89233",
+      "at": "2026-10-03T23:25:53.041Z",
       "status": "BLOCKED"
     }
   ]
