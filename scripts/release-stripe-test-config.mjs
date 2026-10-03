@@ -26,9 +26,11 @@ if (!response.ok) fail(`isolated Supabase TEST secret write failed: HTTP ${respo
 
 // Supabase CLI returns SHA-256 digests in `value`. Parse only in memory and
 // compare against the trusted job's TEST credentials; never emit either value.
+const cliEnv = { ...process.env, SUPABASE_ACCESS_TOKEN: token };
+delete cliEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
 const raw = execFileSync("npx", ["--yes", "supabase@2.113.0", "secrets", "list", "--project-ref", ref, "--output", "json"], {
   encoding: "utf8", timeout: 90000, maxBuffer: 4 * 1024 * 1024,
-  env: { ...process.env, SUPABASE_ACCESS_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"],
+  env: cliEnv, stdio: ["ignore", "pipe", "pipe"],
 });
 const digests = Object.fromEntries(JSON.parse(raw).filter((item) => secrets.some((secret) => secret.name === item.name)).map((item) => [item.name, item.value]));
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");

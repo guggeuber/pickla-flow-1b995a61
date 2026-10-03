@@ -144,7 +144,7 @@ function stageLocked(record, id) {
   let previewMutationAttempted = false;
   try {
     const branch = verifyIsolatedBranch(target);
-    const edgeVersions = isolatedFunctionVersions(target);
+    isolatedFunctionVersions(target);
     previewMutationAttempted = true;
     const deploymentId = record.stage?.vercel_deployment_id || createExactPreview(target, record.candidate_sha, id);
     const preview = discoverExactPreview(target, record.candidate_sha, process.env.STAGE_VERCEL_TOKEN, deploymentId);
@@ -154,11 +154,14 @@ function stageLocked(record, id) {
     let stripeConfigured = false;
     if (process.env.STRIPE_TEST_SECRET_KEY && process.env.STRIPE_TEST_WEBHOOK_SECRET) {
       execFileSync("node", [join(root, "scripts/release-stripe-test-config.mjs")], {
-        cwd: root, env: process.env, encoding: "utf8", timeout: 120000,
+        cwd: root, env: withoutVercelBypassEnv(), encoding: "utf8", timeout: 120000,
         stdio: ["ignore", "pipe", "pipe"],
       });
       stripeConfigured = true;
     }
+    // Supabase secret updates advance Edge versions; bind evidence to the
+    // versions that will actually serve the certification requests.
+    const edgeVersions = isolatedFunctionVersions(target);
     // The URL is an immutable Vercel deployment. Supabase is explicit and must
     // be verified independently before any Edge or fixture mutation.
     record.stage = { ...preview, supabase_ref: branch.ref, supabase_branch_id: branch.branch_id, supabase_branch_status: branch.status, edge_versions: edgeVersions, fixture_venue_slug: target.fixture_venue_slug, checkout_origin: checkoutOrigin.checkout_origin, stripe_test_credentials_available: stripeConfigured };
