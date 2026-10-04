@@ -35,6 +35,10 @@ function finalResponseHeaders(isConfirm: boolean, upstreamContentType: string | 
 
 export default {
   async fetch(request: Request) {
+    if (process.env.VERCEL_ENV === 'preview'
+      && process.env.PICKLA_ISOLATED_CERTIFICATION === 'byuwuoivuuklcwmoesrx') {
+      return errorResponse(503);
+    }
     const credential = process.env.PICKLA_MAIL_PROXY_CREDENTIAL || '';
     if (credential.length < 35 || !credential.includes(':')) return errorResponse(503);
 

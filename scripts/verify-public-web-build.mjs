@@ -2,6 +2,12 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 const root = process.cwd();
+if (process.env.VERCEL_ENV === "preview"
+  && process.env.PICKLA_ISOLATED_CERTIFICATION === "byuwuoivuuklcwmoesrx"
+  && process.env.VITE_SUPABASE_PROJECT_ID === "byuwuoivuuklcwmoesrx") {
+  console.log(JSON.stringify({ skipped: "production Public Web generation in isolated certification preview" }));
+  process.exit(0);
+}
 const fromRoot = (...parts) => path.join(root, ...parts);
 
 function fail(message) {

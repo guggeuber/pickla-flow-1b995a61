@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.pickla-release-v1/
 dist
 dist-ssr
 *.local
@@ -27,3 +28,4 @@ api/_release-identity.generated.json
 .env.local
 .vercel
 .env*
+supabase/.temp/

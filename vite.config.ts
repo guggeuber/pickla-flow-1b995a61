@@ -54,6 +54,9 @@ function resolveBuildIdentity(): BuildIdentity {
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
+  const isolatedCertificationPreview = process.env.VERCEL_ENV === "preview"
+    && process.env.PICKLA_ISOLATED_CERTIFICATION === "byuwuoivuuklcwmoesrx"
+    && process.env.VITE_SUPABASE_PROJECT_ID === "byuwuoivuuklcwmoesrx";
   const buildIdentity = resolveBuildIdentity();
   const buildIdentityPlugin: Plugin = {
     name: "pickla-build-identity",
@@ -98,7 +101,7 @@ export default defineConfig(({ mode }) => {
     mode === "development" && componentTagger(),
     buildIdentityPlugin,
     pwaSurfaceHtmlPlugin,
-    publicWebPlugin(__dirname),
+    !isolatedCertificationPreview && publicWebPlugin(__dirname),
     VitePWA({
       registerType: "autoUpdate",
       strategies: "injectManifest",

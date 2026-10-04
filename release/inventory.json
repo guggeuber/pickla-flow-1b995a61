@@ -1,0 +1,302 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-02T12:10:50Z",
+  "canonical_main": {
+    "sha": "39373c657589f46673c2563c03879b7201e8bd30",
+    "source": "git fetch origin main; git ls-remote origin refs/heads/main"
+  },
+  "github": {
+    "repo": "guggeuber/pickla-flow-1b995a61",
+    "visibility": "public",
+    "plan": "UNKNOWN",
+    "rulesets": [],
+    "branch_protection": {
+      "main": true,
+      "main_details": {
+        "pr_required": true,
+        "required_approvals": 0,
+        "linear_history": true,
+        "enforce_admins": true,
+        "force_push": false,
+        "deletion": false,
+        "reason_zero_approvals": "sole collaborator cannot self-approve"
+      }
+    },
+    "actions_permissions": {
+      "enabled": true,
+      "allowed_actions": "all",
+      "sha_pinning_required": false
+    },
+    "environments": [
+      {
+        "name": "Preview – pickla-flow-1b995a61",
+        "approval_rules": []
+      },
+      {
+        "name": "Preview – pickla-mail-v1-edde736",
+        "approval_rules": []
+      },
+      {
+        "name": "Preview – pickla-stage",
+        "approval_rules": []
+      },
+      {
+        "name": "Production",
+        "approval_rules": []
+      },
+      {
+        "name": "Production – pickla-flow-1b995a61",
+        "approval_rules": []
+      },
+      {
+        "name": "Production – pickla-mail-v1-edde736",
+        "approval_rules": []
+      },
+      {
+        "name": "Production – pickla-stage",
+        "approval_rules": []
+      },
+      {
+        "name": "pickla-release-certification",
+        "approval_rules": [],
+        "branch_policy": "main only",
+        "secret_names": []
+      }
+    ],
+    "secret_names": [],
+    "workflows": [],
+    "source": "gh api on 2026-10-02: public repo, sole collaborator guggeuber, no rulesets, Actions allowed all/read default, main PR protection enabled and verified, registry/lock enforce_admins enabled, certification environment main branch only and zero secrets",
+    "registry_ref_protection": {
+      "refs": [
+        "pickla-release-registry",
+        "pickla-release-isolated-lock"
+      ],
+      "linear_history": true,
+      "enforce_admins": true,
+      "force_push": false,
+      "deletion": false,
+      "bypass_warning": "repository admin and contents:write token can still make normal fast-forward commits"
+    }
+  },
+  "vercel": {
+    "projects": [
+      {
+        "role": "production",
+        "id": "prj_ZXHb62NWhYVlIrj2yaEZekIxgJVV",
+        "git_connection": "guggeuber/pickla-flow-1b995a61",
+        "production_branch": "main",
+        "create_deployments": "enabled",
+        "autoassign": true,
+        "aliases": [
+          "playpickla.com",
+          "www.playpickla.com"
+        ],
+        "deploy_hooks": [],
+        "served_release": {
+          "sha": "39373c657589f46673c2563c03879b7201e8bd30",
+          "deployment_id": "dpl_Epaqm5bfxK9ebKyP3h1fYxEBHUWj"
+        },
+        "alias": "playpickla.com"
+      },
+      {
+        "role": "shared_stage",
+        "id": "prj_UpeWrQfUsTKcYETcIy08PmzeCP1s",
+        "git_connection": "guggeuber/pickla-flow-1b995a61",
+        "production_branch": "main",
+        "create_deployments": "enabled",
+        "autoassign": true,
+        "aliases": [
+          "stage.playpickla.com"
+        ],
+        "deploy_hooks": [],
+        "served_release": {
+          "sha": "200b5fe15cbb4174c6a44ef0250e1d55b12e745f",
+          "deployment_id": "dpl_BBjGz3Ht4D1PS2bA9ZhMLCu3c41D"
+        },
+        "alias": "stage.playpickla.com",
+        "owner": "gunnar-picklaat's projects (Hobby)"
+      },
+      {
+        "role": "mail",
+        "id": "prj_c9wdkbsstp9Qgx9C8Xf4JIySVrJ6",
+        "git_connection": "guggeuber/pickla-flow-1b995a61",
+        "production_branch": "main",
+        "create_deployments": "enabled",
+        "autoassign": true,
+        "aliases": [
+          "pickla-mail-v1-edde736.vercel.app"
+        ],
+        "deploy_hooks": [],
+        "served_release": {
+          "sha": "567581097d97a8631fc95c2770bffdcbba6effd9",
+          "deployment_id": "dpl_BMWV4ihZ3CWfAVqBjgosPVU3wuY8"
+        },
+        "alias": "UNKNOWN"
+      }
+    ],
+    "source": "Vercel authenticated GET /v9/projects/{id}, /domains, /v6/deployments and alias inspect on 2026-10-02; all three link main as production branch with gitProviderOptions.createDeployments=enabled and autoAssignCustomDomains=true; all deployHooks=[]"
+  },
+  "supabase": {
+    "production": {
+      "ref": "ptnvhbniiiapzbyofctg",
+      "status": "ACTIVE_HEALTHY",
+      "git_integration": "DISCONNECTED_PARENT_DASHBOARD",
+      "deploy_to_production": "NO_GITHUB_REPOSITORY_CONNECTED",
+      "migration_ledger": "UNKNOWN",
+      "edge_versions": {
+        "api-admin": 83,
+        "api-bookings": 87,
+        "api-commerce": 44,
+        "api-courses": 28,
+        "api-event-public": 74,
+        "api-leagues": 17,
+        "api-stripe": 24,
+        "api-stripe-webhook": 52
+      }
+    },
+    "shared_stage": {
+      "ref": "anpxxnpevtxhiajxmfji",
+      "ownership": {
+        "parent_ref": "ptnvhbniiiapzbyofctg",
+        "parent_organization_id": "ynizqjnrxwljfedoyiid",
+        "branch_name": "stage",
+        "persistent": true
+      },
+      "git_integration": "UNKNOWN",
+      "migration_ledger": "UNKNOWN",
+      "edge_versions": {
+        "api-admin": 91,
+        "api-bookings": 92,
+        "api-commerce": 56,
+        "api-event-public": 77,
+        "api-stripe": 29,
+        "api-stripe-webhook": 58
+      },
+      "status": "MIGRATIONS_FAILED",
+      "preview_project_status": "ACTIVE_HEALTHY",
+      "with_data": false,
+      "stripe_secret_name_present": true,
+      "public_test_venue": "404 for solna and pickla-arena-sthlm"
+    },
+    "source": "Explicit-ref CLI and isolated-branch read-only SQL plus Supabase dashboard on 2026-10-01. MIGRATIONS_FAILED is workflow metadata; exact failed step cannot be retrieved from disabled workflow detail. Live schema has all 62 repository migration versions and 167 public tables.",
+    "isolated_student_test_branch": {
+      "ref": "byuwuoivuuklcwmoesrx",
+      "ownership": {
+        "parent_ref": "ptnvhbniiiapzbyofctg",
+        "parent_organization_id": "ynizqjnrxwljfedoyiid",
+        "branch_name": "student-pricing-hotfix-test-20260926",
+        "persistent": true,
+        "persistence_repair": "Changed only isolated test branch from ephemeral to persistent on 2026-10-01; no branch recreation"
+      },
+      "status": "MIGRATIONS_FAILED",
+      "preview_project_status": "ACTIVE_HEALTHY",
+      "with_data": false,
+      "stripe_secret_name_present": false,
+      "public_test_venue": "student-hotfix-5403bc75 returns 200; solna and pickla-arena-sthlm return 404 because those slugs do not exist in this branch",
+      "edge_versions": {
+        "api-admin": 84,
+        "api-bookings": 87,
+        "api-commerce": 44,
+        "api-event-public": 74,
+        "api-stripe": 24,
+        "api-stripe-webhook": 53
+      },
+      "migration_ledger": {
+        "count": 62,
+        "repo_count": 62,
+        "latest": "20260922120000_cancellation_policy_v1",
+        "missing_repo_versions": 0,
+        "schema_public_tables": 167,
+        "failed_migration": "UNKNOWN: dashboard workflow run is disabled; all repository versions are in ledger",
+        "core_schema_operational": true
+      },
+      "synthetic_data": {
+        "venue_slugs": [
+          "recovery-a-f3567887b6",
+          "recovery-a2-f3567887b6",
+          "recovery-b-f3567887b6",
+          "student-hotfix-5403bc75",
+          "student-hotfix-71e4fa0e",
+          "student-hotfix-db011b93"
+        ],
+        "auth_users": 15,
+        "auth_non_example_test": 0,
+        "commerce_orders": 35,
+        "stripe_test_session_orders": 2,
+        "non_test_session_orders": 0,
+        "certification_venue": "student-hotfix-5403bc75",
+        "certification_occurrence_date": "2026-10-13",
+        "student_session_id": "b4bf1691-8f9c-463b-b7eb-57bb7b1fcae0",
+        "normal_open_play_session_id": "f1a6e8af-473a-4390-ab3d-bc8c848ebf1b"
+      },
+      "auth_config": "15 example.test users; one active venue_admin for certification venue; project Auth settings not fully audited",
+      "secret_names": [
+        "PICKLA_ENVIRONMENT",
+        "PUBLIC_SITE_URL",
+        "SUPABASE_ANON_KEY",
+        "SUPABASE_DB_URL",
+        "SUPABASE_JWKS",
+        "SUPABASE_PUBLISHABLE_KEYS",
+        "SUPABASE_SECRET_KEYS",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_URL"
+      ],
+      "migration_ledger_count": 62,
+      "public_table_count": 169,
+      "checkout_origin": "https://pickla-flow-1b995a61-6z2duaze3-gunnar-picklaats-projects.vercel.app",
+      "checkout_origin_verified": "2026-10-02"
+    }
+  },
+  "routes": {
+    "vercel_git": "ENABLED_ALL_THREE_MAIN_PRODUCTION",
+    "vercel_autoassign": "ENABLED_ALL_THREE",
+    "vercel_hooks": "NONE_ALL_THREE",
+    "supabase_github": "DISCONNECTED_PARENT_DASHBOARD",
+    "manual_cli": "PRESENT",
+    "production_exclusive": false,
+    "isolated_vercel_deploy_hooks": "NONE",
+    "isolated_vercel_preview_branch": "codex/release-v1-20261001",
+    "isolated_preview_domains": "VERCEL_APP_ONLY"
+  },
+  "local_gates": {
+    "prod_check": "Vitest plus source assertions plus build/PWA identity artifact checks; no live checkout or Stage behavior",
+    "edge_plan": "shared CORS browser consumer source selection only",
+    "migrations": "62 repo versions match isolated ledger; historical MIGRATIONS_FAILED workflow step unknown",
+    "stripe_test": "No live checkout in this run: isolated Supabase ref lacks STRIPE_SECRET_KEY and GitHub Actions secret names are empty",
+    "release_identity": "Old PR preview identity PASS but built with production Supabase URL; isolated branch-scoped rebuild pending",
+    "isolated_deployed_studentpris": "At 2026-10-01T16:06Z and repeated after reset: Admin save/reload PASS, Studentpris 59/59/59/59 PASS, explicit Play rule 49 PASS, normal Open Play 165/99/0/0 PASS; observed directly on isolated Edge APIs; no candidate SHA-bound Vercel preview yet",
+    "cors": "source contract gate; live gate available but not run",
+    "ops": "ops-agent-check source checks"
+  },
+  "isolated_stage_decision": {
+    "status": "BLOCKED",
+    "reason": "Isolated branch and deployed synthetic pricing path work. A manual exact-SHA Preview API probe passed at PR head 0a52c087; the workflow is not yet on protected main. GitHub certification secrets and the isolated branch Stripe TEST secrets are absent, so real TEST payment is unverified.",
+    "minimum_action": "After separate routing cutover approval, merge the reviewed bootstrap PR to protected main. Provision the four permanent certification environment secret names and isolated Stripe TEST webhook through an approved secret channel; do not copy secret values into a chat or worktree."
+  },
+  "bootstrap_2026_10_02": {
+    "pr_head_at_control_plane_read": "0a52c087126a920dd6ca3eb0f6dc1530f5fe5a7c",
+    "origin_main": "39373c657589f46673c2563c03879b7201e8bd30",
+    "merge_effect": "main push triggers production deployments in all three Vercel projects; production and shared Stage custom domains autoassign if build succeeds",
+    "isolated_secret_names": [
+      "SUPABASE_ANON_KEY",
+      "SUPABASE_DB_URL",
+      "SUPABASE_JWKS",
+      "SUPABASE_PUBLISHABLE_KEYS",
+      "SUPABASE_SECRET_KEYS",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "SUPABASE_URL"
+    ],
+    "stripe_test_credentials_available": false,
+    "github_certification_secret_names": [],
+    "credential_rotation": "BLOCKED: independent legacy JWT/service/anon rotation and authorized opaque credential transfer not verified",
+    "routing_cutover": "REQUIRES_SEPARATE_APPROVAL: disable gitProviderOptions.createDeployments on all three Vercel projects before bootstrap merge; preserve current aliases; exact-SHA Preview API adapter is in PR and must be verified after cutover",
+    "supabase_warning": "MIGRATIONS_FAILED workflow detail unknown; DB select succeeds, 62 migration ledger rows, 169 public tables, 15 synthetic Auth users, and required Edge functions active",
+    "explicit_preview_api_probe": {
+      "deployment_id": "dpl_9jkyxQdqnk8xBsqMpo7MNRyn4s3Q",
+      "served_sha": "0a52c087126a920dd6ca3eb0f6dc1530f5fe5a7c",
+      "environment": "preview",
+      "isolated_supabase_bundle": true,
+      "production_alias_assigned": false
+    }
+  }
+}

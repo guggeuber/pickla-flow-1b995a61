@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "purpose": "isolated_candidate_stage",
+      "owner": "Fat Fast Down / gunnar-picklaats-projects",
+      "supabase_ref": "byuwuoivuuklcwmoesrx",
+      "supabase_branch_id": "4aec1694-5d7d-4691-9228-a03c156371bc",
+      "supabase_parent_ref": "ptnvhbniiiapzbyofctg",
+      "vercel_project_id": "prj_ZXHb62NWhYVlIrj2yaEZekIxgJVV",
+      "preview_git_branch": "codex/release-v1-20261001",
+      "preview_domain_suffix": ".vercel.app",
+      "preview_env_verified_after": "2026-10-01T15:35:00Z",
+      "forbidden_domains": ["playpickla.com", "www.playpickla.com", "stage.playpickla.com"],
+      "fixture_venue_slug": "student-hotfix-5403bc75",
+      "verified_at": "2026-10-01T15:35:00Z",
+      "source": "Supabase branch control plane and read-only SQL; Vercel project settings, exact PR preview and branch-scoped environment list"
+    }
+  ]
+}
