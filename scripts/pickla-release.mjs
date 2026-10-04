@@ -80,6 +80,26 @@ function mainGuard(record) {
   if (digest(policyBytes) !== record.policy_sha) fail("policy changed");
 }
 function trustedMain(record) {
+  if (record.bootstrap_trust) {
+    const originalTag = "pickla-release-bootstrap-v1-edge";
+    const resumeTags = ["pickla-release-bootstrap-v1-pooler-fixed", "pickla-release-bootstrap-v1-stripe-browser-fixed"];
+    const resumeTag = resumeTags.find((value) => process.env.GITHUB_REF === `refs/tags/${value}`);
+    const isResume = Boolean(resumeTag);
+    const tag = resumeTag || originalTag;
+    const sha = git(["rev-parse", "HEAD"]);
+    if (record.bootstrap_trust.mode !== "reviewed_tag_v1" || record.bootstrap_trust.ref !== `refs/tags/${originalTag}` || process.env.GITHUB_ACTIONS !== "true" || process.env.GITHUB_REF !== `refs/tags/${tag}` || process.env.GITHUB_SHA !== sha) return false;
+    if (isResume) {
+      if (record.release_id !== "rel-b0d5e9764aed-ae5fc683" || record.bootstrap_trust.workflow_sha !== "b538cbdce937ef8858a6953a8c028d1919a8e363") return false;
+    } else if (record.bootstrap_trust.workflow_sha !== sha || process.env.PICKLA_BOOTSTRAP_SHA !== sha) return false;
+    try {
+      if (git(["ls-remote", "origin", `refs/tags/${tag}`]).split("\t")[0] !== sha) return false;
+      const rulesets = JSON.parse(execFileSync("gh", ["api", "repos/guggeuber/pickla-flow-1b995a61/rulesets?targets=tag"], { cwd: root, encoding: "utf8", timeout: 30000 }));
+      const rule = rulesets.find((value) => value.name === `${tag}-immutable` && value.enforcement === "active" && value.target === "tag");
+      if (!rule) return false;
+      const details = JSON.parse(execFileSync("gh", ["api", `repos/guggeuber/pickla-flow-1b995a61/rulesets/${rule.id}`], { cwd: root, encoding: "utf8", timeout: 30000 }));
+      return details.conditions?.ref_name?.include?.includes(`refs/tags/${tag}`) && ["update", "deletion"].every((type) => details.rules?.some((item) => item.type === type)) && !details.bypass_actors?.length;
+    } catch { return false; }
+  }
   if (git(["rev-parse", "HEAD"]) !== record.base_sha) return false;
   try {
     execFileSync("gh", ["api", "repos/guggeuber/pickla-flow-1b995a61/branches/main/protection"], { cwd: root, timeout: 30000, stdio: "ignore" });
@@ -101,7 +121,9 @@ function inspect(sha) {
     const ids = selectInvariants(classification, policy);
     const id = `rel-${sha.slice(0, 12)}-${digest(`${main}:${digest(policyBytes)}`).slice(0, 8)}`;
     const now = new Date().toISOString();
-    const record = { schema_version: 1, release_id: id, candidate_sha: sha, base_sha: main, policy_sha: digest(policyBytes), tree_sha: tree, domains: classification.domains, capabilities: classification.capabilities, risk_floor: classification.risk_floor, urgency: "normal", decision: classification.decision, reasons: classification.reasons, affected_edge_functions: classification.edge_functions, edge_manifest: Object.fromEntries(classification.edge_functions.map((name) => [name, digest((edgeGraph(temp).consumers[name] || []).map((path) => readFileSync(join(temp, path))).join("\n"))])), invariants: Object.fromEntries(ids.map((key) => [key, { status: "required" }])), stage: null, intended_production: { vercel: "UNKNOWN", supabase: "UNKNOWN", migrations: "manual-review" }, recovery_reference: null, evidence: {}, status: classification.decision === "NEEDS_REVIEW" ? "BLOCKED" : "INSPECTED", blockers: classification.decision === "NEEDS_REVIEW" ? ["unknown effect needs review"] : [], created_at: now, updated_at: now, events: [] };
+    const bootstrapTrust = process.env.PICKLA_BOOTSTRAP_REQUEST === "reviewed_tag_v1" && process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_REF === "refs/tags/pickla-release-bootstrap-v1-edge" && process.env.GITHUB_SHA === git(["rev-parse", "HEAD"])
+      ? { mode: "reviewed_tag_v1", ref: process.env.GITHUB_REF, workflow_sha: process.env.GITHUB_SHA } : null;
+    const record = { schema_version: 1, release_id: id, candidate_sha: sha, base_sha: main, policy_sha: digest(policyBytes), tree_sha: tree, domains: classification.domains, capabilities: classification.capabilities, risk_floor: classification.risk_floor, urgency: "normal", decision: classification.decision, reasons: classification.reasons, affected_edge_functions: classification.edge_functions, edge_manifest: Object.fromEntries(classification.edge_functions.map((name) => [name, digest((edgeGraph(temp).consumers[name] || []).map((path) => readFileSync(join(temp, path))).join("\n"))])), invariants: Object.fromEntries(ids.map((key) => [key, { status: "required" }])), bootstrap_trust: bootstrapTrust, stage: null, intended_production: { vercel: "UNKNOWN", supabase: "UNKNOWN", migrations: "manual-review" }, recovery_reference: null, evidence: {}, status: classification.decision === "NEEDS_REVIEW" ? "BLOCKED" : "INSPECTED", blockers: classification.decision === "NEEDS_REVIEW" ? ["unknown effect needs review"] : [], created_at: now, updated_at: now, events: [] };
     save(record, "INSPECTED", { key: sha });
     console.log(JSON.stringify(record, null, 2));
   } finally { rmSync(temp, { recursive: true, force: true }); }
@@ -224,10 +246,13 @@ function verify(id, mode = "normal") {
         const branch = verifyIsolatedBranch(target);
         if (branch.ref !== record.stage.supabase_ref || branch.branch_id !== record.stage.supabase_branch_id) throw new Error("staged Supabase identity changed");
         if (JSON.stringify(isolatedFunctionVersions(target)) !== JSON.stringify(record.stage.edge_versions)) throw new Error("staged Edge function versions changed");
-        const evidence = JSON.parse(execFileSync("node", [join(root, "scripts/release-studentpris-harness.mjs"), "run"], { cwd: root, env: withoutStripeEnv(), encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }));
-        record.evidence.studentpris = evidence;
-        for (const key of ["price.server_authoritative", "studentpris.member_matrix", "open_play.inverse", "studentpris.admin_save_reload"]) if (record.invariants[key]) record.invariants[key] = { status: "passed", evidence_ref: `record:evidence.studentpris#${evidence.sha256}`, at: evidence.observed_at };
-        save(record, "EVIDENCE", { key: evidence.sha256, scope: "isolated-studentpris", digest: evidence.sha256 });
+        const pricingIds = ["price.server_authoritative", "studentpris.member_matrix", "open_play.inverse", "studentpris.admin_save_reload"];
+        if (!record.evidence.studentpris?.sha256 || pricingIds.some((key) => record.invariants[key]?.status !== "passed")) {
+          const evidence = JSON.parse(execFileSync("node", [join(root, "scripts/release-studentpris-harness.mjs"), "run"], { cwd: root, env: withoutStripeEnv(), encoding: "utf8", timeout: 180000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }));
+          record.evidence.studentpris = evidence;
+          for (const key of pricingIds) if (record.invariants[key]) record.invariants[key] = { status: "passed", evidence_ref: `record:evidence.studentpris#${evidence.sha256}`, at: evidence.observed_at };
+          save(record, "EVIDENCE", { key: evidence.sha256, scope: "isolated-studentpris", digest: evidence.sha256 });
+        }
         if (process.env.STRIPE_TEST_SECRET_KEY && record.stage.stripe_test_credentials_available && record.invariants["stripe.test_amount"]?.status !== "passed") {
           gate = "stripe";
           const payment = JSON.parse(execFileSync("node", [join(root, "scripts/release-stripe-test-harness.mjs"), "run", current.deployment_url, id], {
@@ -241,9 +266,19 @@ function verify(id, mode = "normal") {
         }
         if (JSON.stringify(isolatedFunctionVersions(target)) !== JSON.stringify(record.stage.edge_versions)) throw new Error("isolated Edge function versions changed during certification");
       }));
+      record.blockers = [];
     } catch (error) {
-      if (gate === "stripe" && record.invariants["stripe.test_amount"]) record.invariants["stripe.test_amount"] = { status: "failed", reason: "trusted Stripe TEST payment or canonical Pickla result did not verify" };
-      record.blockers = [gate === "stripe" ? "trusted Stripe TEST payment or canonical Pickla result did not verify; isolated target lock held for reconciliation" : `isolated deployed-behavior gate failed: ${error.message}`];
+      let stripeFailure = null;
+      if (gate === "stripe") {
+        try {
+          const parsed = JSON.parse(String(error.stderr || "").trim().split("\n").at(-1));
+          if (parsed.status === "FAIL" && /^[a-z_]+$/.test(parsed.phase) && /^[a-z_]+$/.test(parsed.classification)) stripeFailure = parsed;
+        } catch { /* child did not produce a structured safe failure */ }
+      }
+      if (stripeFailure) record.evidence.stripe_failure = stripeFailure;
+      const stripeReason = stripeFailure ? `trusted Stripe TEST ${stripeFailure.phase}: ${stripeFailure.classification}` : "trusted Stripe TEST payment or canonical Pickla result did not verify";
+      if (gate === "stripe" && record.invariants["stripe.test_amount"]) record.invariants["stripe.test_amount"] = { status: "failed", reason: stripeReason };
+      record.blockers = [gate === "stripe" ? `${stripeReason}; isolated target lock held for reconciliation` : `isolated deployed-behavior gate failed: ${error.message}`];
       save(record, "BLOCKED", { key: "isolated-behavior", reason: record.blockers[0] });
     }
   }

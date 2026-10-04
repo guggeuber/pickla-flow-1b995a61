@@ -1,0 +1,61 @@
+name: Pickla Release V1 verify existing isolated Stage
+on:
+  push:
+    tags:
+      - pickla-release-bootstrap-v1-stripe-browser-fixed
+permissions:
+  contents: read
+concurrency:
+  group: pickla-stage-v1
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: pickla-release-certification
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Load existing trusted release record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REF" = refs/tags/pickla-release-bootstrap-v1-stripe-browser-fixed
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          gh auth setup-git
+          test "$(gh pr view 4 --repo guggeuber/pickla-flow-1b995a61 --json headRefOid --jq .headRefOid)" = bf739011384f6343061e152a5b81f5b8dba74ada
+          git fetch origin bf739011384f6343061e152a5b81f5b8dba74ada
+          test "$(git rev-parse bf739011384f6343061e152a5b81f5b8dba74ada:scripts/release-isolated-db.mjs)" = "$(git hash-object scripts/release-isolated-db.mjs)"
+          test "$(git rev-parse bf739011384f6343061e152a5b81f5b8dba74ada:scripts/release-isolated-db.test.mjs)" = "$(git hash-object scripts/release-isolated-db.test.mjs)"
+          git fetch origin refs/heads/main:refs/remotes/origin/main
+          git fetch origin refs/heads/pickla-release-registry:refs/remotes/origin/pickla-release-registry
+          git fetch origin b0d5e9764aedcf9ce73c395435b1d23658eec2e5
+          mkdir -p .pickla-release-v1
+          git show origin/pickla-release-registry:records/rel-b0d5e9764aed-ae5fc683.json > .pickla-release-v1/rel-b0d5e9764aed-ae5fc683.json
+          jq -e '.candidate_sha == "b0d5e9764aedcf9ce73c395435b1d23658eec2e5" and .stage.vercel_deployment_id == "dpl_7t4DqAU3Lu9S5vvtZkHxGiMVZy9N" and .invariants["release.identity_exact"].status == "passed" and .invariants["release.stage_identity_exact"].status == "passed"' .pickla-release-v1/rel-b0d5e9764aed-ae5fc683.json >/dev/null
+          npm ci --ignore-scripts
+          command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
+          npx playwright install --with-deps chromium
+      - name: Retire the expired unpaid diagnostic TEST Checkout and release its lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
+          STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+        run: node scripts/release-stripe-reconcile.mjs
+      - name: Verify deployed behavior and real Stripe TEST once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGE_VERCEL_TOKEN: ${{ secrets.STAGE_VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          STAGE_SUPABASE_ACCESS_TOKEN: ${{ secrets.STAGE_SUPABASE_ACCESS_TOKEN }}
+          STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+        run: node scripts/pickla-release.mjs verify rel-b0d5e9764aed-ae5fc683
+      - name: Persist passed or blocked evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if test -d .pickla-release-v1; then node scripts/release-registry-sync.mjs; fi
